@@ -9,3 +9,6 @@ data/*.sqlite*
 # Tauri / Rust
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# 本地归档（旧工作区快照与清理清单，不进公开仓库）
+docs/archive/
