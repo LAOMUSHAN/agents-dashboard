@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>今日统计</title>
+    <style>
+      /* 胶囊窗口透明,圆角与底色由 CSS 绘制,不能有整窗背景色 */
+      html,
+      body {
+        background: transparent;
+      }
+    </style>
+    <script>
+      (function () {
+        try {
+          var m = localStorage.getItem("theme");
+          if (m !== "dark" && m !== "light") m = "auto";
+          var dark =
+            m === "dark" ||
+            (m === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/mini/main.tsx"></script>
+  </body>
+</html>

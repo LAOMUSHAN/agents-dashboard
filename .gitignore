@@ -1,0 +1,11 @@
+node_modules/
+dist/
+data/pricing.json
+data/*.sqlite*
+*.log
+.DS_Store
+.zcode/
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/schemas/
