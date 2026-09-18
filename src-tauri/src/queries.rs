@@ -110,13 +110,13 @@ pub fn earliest_timestamp(conn: &Connection) -> rusqlite::Result<Option<i64>> {
 /// 多列组合键用 char(1) 拼接。返回 (key→美元金额, 出现过但未配置单价的模型集合)
 /// 逐请求计价的聚合结果:按 key 分组的费用 + 未配置价格的模型 + 缓存节省总额
 struct CostAgg {
+    /// key → 费用合计(美元口径,两种币种定价的模型都折成美元后相加)
     cost: HashMap<String, f64>,
+    /// key → 其中按人民币定价的模型那部分(美元口径)。与 cost 相减即美元定价部分,
+    /// 展示时再乘汇率还原成人民币——分组行可能同时含两种币种的模型,必须分开留存
+    cost_cny_usd: HashMap<String, f64>,
     unpriced: std::collections::BTreeSet<String>,
     savings: f64,
-    /// 用美元定价的模型的费用合计(美元)
-    cost_usd_priced: f64,
-    /// 用人民币定价的模型的费用合计(美元口径,展示时再乘汇率)
-    cost_cny_priced_usd: f64,
     /// 缓存节省同样按币种归属:美元价模型省下的(美元) / 人民币价模型省下的(美元口径)
     savings_usd_priced: f64,
     savings_cny_priced_usd: f64,
@@ -151,10 +151,9 @@ fn cost_rows(
         },
     )?;
     let mut cost: HashMap<String, f64> = HashMap::new();
+    let mut cost_cny_usd: HashMap<String, f64> = HashMap::new();
     let mut unpriced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut savings = 0.0;
-    let mut cost_usd_priced = 0.0;
-    let mut cost_cny_priced_usd = 0.0;
     let mut savings_usd_priced = 0.0;
     let mut savings_cny_priced_usd = 0.0;
     for (k, model, ts, i, o, cr, cw) in rows {
@@ -165,10 +164,9 @@ fn cost_rows(
         savings += row.saving;
         if row.priced {
             if row.is_cny {
-                cost_cny_priced_usd += row.cost;
+                *cost_cny_usd.entry(k.clone()).or_insert(0.0) += row.cost;
                 savings_cny_priced_usd += row.saving;
             } else {
-                cost_usd_priced += row.cost;
                 savings_usd_priced += row.saving;
             }
         }
@@ -176,13 +174,31 @@ fn cost_rows(
     }
     Ok(CostAgg {
         cost,
+        cost_cny_usd,
         unpriced,
         savings,
-        cost_usd_priced,
-        cost_cny_priced_usd,
         savings_usd_priced,
         savings_cny_priced_usd,
     })
+}
+
+impl CostAgg {
+    /// 某个分组 key 的分币种金额:(美元定价模型的费用, 人民币定价模型的费用)。
+    /// 返回值各是真实金额——分组行可能同时含两种币种的模型,不能只看总额贴一个符号。
+    /// 分组键不存在时返回 (0, 0)
+    fn split(&self, key: &str, rate: f64) -> (f64, f64) {
+        let total = *self.cost.get(key).unwrap_or(&0.0);
+        let cny_usd = *self.cost_cny_usd.get(key).unwrap_or(&0.0);
+        (total - cny_usd, cny_usd * rate)
+    }
+
+    /// 全部 key 的三元合计:(总额, 美元定价部分, 人民币定价部分)。
+    /// 总额直接取按 key 求和,不由两侧相加还原,避免浮点误差累积
+    fn split_total(&self, rate: f64) -> (f64, f64, f64) {
+        let total: f64 = self.cost.values().sum();
+        let cny_usd: f64 = self.cost_cny_usd.values().sum();
+        (total, total - cny_usd, cny_usd * rate)
+    }
 }
 
 pub fn get_summary(conn: &Connection, range: &Range, pricing_path: &std::path::Path) -> rusqlite::Result<Summary> {
@@ -231,11 +247,9 @@ pub fn get_summary(conn: &Connection, range: &Range, pricing_path: &std::path::P
     // 逐请求计价(含峰谷/长上下文),再按模型聚合
     let cfg = pricing::load(pricing_path);
     let agg = cost_rows(conn, range, &cfg, "mu.model_id")?;
-    let cost: f64 = agg.cost.values().sum();
-    let unpriced_models: Vec<String> = agg.unpriced.into_iter().collect();
     // 按币种分账:两个数字各自是真实支出,不是同一个总额的两种换算
-    let cost_usd = agg.cost_usd_priced;
-    let cost_cny = agg.cost_cny_priced_usd * cfg.usd_cny_rate;
+    let (cost, cost_usd, cost_cny) = agg.split_total(cfg.usd_cny_rate);
+    let unpriced_models: Vec<String> = agg.unpriced.iter().cloned().collect();
     let cache_savings_usd = agg.savings_usd_priced;
     let cache_savings_cny = agg.savings_cny_priced_usd * cfg.usd_cny_rate;
 
@@ -649,6 +663,7 @@ pub fn get_model_stats(conn: &Connection, range: &Range, pricing_path: &std::pat
                 ),
                 avg_ttft_ms: r.get::<_, Option<f64>>(10)?.map(|v| v.round() as i64),
                 cost: 0.0,
+                currency: None,
                 priced: false,
                 errors: 0,
             })
@@ -685,6 +700,8 @@ pub fn get_model_stats(conn: &Connection, range: &Range, pricing_path: &std::pat
         .into_iter()
         .map(|mut s| {
             s.cost = cost_by_model.get(&s.model_id).copied().unwrap_or(0.0);
+            // 费用符号跟随该模型价格表条目的币种(与「模型单价」逐行显示一致)
+            s.currency = cfg.models.get(&s.model_id).and_then(|e| e.currency.clone());
             s.priced = !unpriced_set.contains(&s.model_id);
             s.errors = errors_by_model.get(&s.model_id).copied().unwrap_or(0);
             s
@@ -812,9 +829,11 @@ pub fn get_project_stats(conn: &Connection, range: &Range, pricing_path: &std::p
         },
     )?;
 
-    // 逐请求计价后按项目目录聚合(键与 PROJECT_DIR 一致,子代理行归到父会话目录)
+    // 逐请求计价后按项目目录聚合(键与 PROJECT_DIR 一致,子代理行归到父会话目录);
+    // 分币种各自留存,目录下混用两种定价时费用列要并排展示
     let cfg = pricing::load(pricing_path);
-    let cost_by_dir = cost_rows(conn, range, &cfg, PROJECT_DIR)?.cost;
+    let agg = cost_rows(conn, range, &cfg, PROJECT_DIR)?;
+    let rate = cfg.usd_cny_rate;
 
     // 错误数不过滤状态单独统计(与错误分析面板口径一致)
     let (conds, err_params) = range_conds("mu.started_at", range);
@@ -839,9 +858,12 @@ pub fn get_project_stats(conn: &Connection, range: &Range, pricing_path: &std::p
     Ok(rows
         .into_iter()
         .map(|(directory, requests, sessions, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, total_tokens, duration_ms, decode_duration_ms, decode_output_tokens, avg_ttft_ms)| {
+            let (cost_usd, cost_cny) = agg.split(&directory, rate);
             let mut s = ProjectStat {
                 name: base_name(&directory),
-                cost: cost_by_dir.get(&directory).copied().unwrap_or(0.0),
+                cost: cost_usd + cost_cny / rate,
+                cost_usd,
+                cost_cny,
                 directory,
                 requests,
                 sessions,
@@ -962,17 +984,25 @@ pub fn get_provider_stats(conn: &Connection, range: &Range, pricing_path: &std::
         },
     )?;
 
-    // 逐请求计价后按「供应商 × 模型」聚合(供应商总额 = 其下模型之和)
+    // 逐请求计价后按「供应商 × 模型」聚合(供应商总额 = 其下模型之和);
+    // 同时留一份按供应商的人民币金额,供应商可能同时挂两种币种定价的模型
     let cfg = pricing::load(pricing_path);
-    let cost_by_pm =
-        cost_rows(conn, range, &cfg, "mu.provider_id || char(31) || mu.model_id")?.cost;
+    let agg = cost_rows(conn, range, &cfg, "mu.provider_id || char(31) || mu.model_id")?;
+    let cost_by_pm = &agg.cost;
+    let rate = cfg.usd_cny_rate;
     let mut cost_by_provider: HashMap<String, f64> = HashMap::new();
+    // 供应商侧的人民币金额(美元口径):一个供应商可能同时挂两种币种定价的模型
+    let mut cost_cny_by_provider: HashMap<String, f64> = HashMap::new();
     let mut models_by_provider: HashMap<String, Vec<ProviderModelStat>> = HashMap::new();
     for r in &per_model {
-        let cost = *cost_by_pm
-            .get(&format!("{}{}{}", r.provider_id, KEY_SEP, r.model_id))
-            .unwrap_or(&0.0);
+        let pm_key = format!("{}{}{}", r.provider_id, KEY_SEP, r.model_id);
+        let cost = *cost_by_pm.get(&pm_key).unwrap_or(&0.0);
+        // 币种由模型的价格条目决定:供应商 × 模型 这一格必然单币种,供应商整体可能混用
+        let currency = cfg.models.get(&r.model_id).and_then(|e| e.currency.clone());
         *cost_by_provider.entry(r.provider_id.clone()).or_insert(0.0) += cost;
+        if pricing::is_cny_currency(currency.as_deref()) {
+            *cost_cny_by_provider.entry(r.provider_id.clone()).or_insert(0.0) += cost;
+        }
         models_by_provider.entry(r.provider_id.clone()).or_default().push(ProviderModelStat {
             model_id: r.model_id.clone(),
             requests: r.requests,
@@ -989,6 +1019,7 @@ pub fn get_provider_stats(conn: &Connection, range: &Range, pricing_path: &std::
             ),
             avg_ttft_ms: r.avg_ttft_ms,
             cost,
+            currency,
         });
     }
     for models in models_by_provider.values_mut() {
@@ -1020,13 +1051,17 @@ pub fn get_provider_stats(conn: &Connection, range: &Range, pricing_path: &std::
         .into_iter()
         .map(|(provider_id, a, (decode_duration_ms, decode_output_tokens))| {
             let total_tokens = a.input_tokens + a.output_tokens;
+            let cost_cny_usd = cost_cny_by_provider.get(&provider_id).copied().unwrap_or(0.0);
+            let cost = cost_by_provider.get(&provider_id).copied().unwrap_or(0.0);
             ProviderStat {
                 name: names.get(&provider_id).cloned().unwrap_or_else(|| provider_id.clone()),
                 total_tokens,
                 tokens_per_sec: weighted_tokens_per_sec(a.output_tokens, Some(a.duration_ms)),
                 decode_tokens_per_sec: weighted_tokens_per_sec(decode_output_tokens, Some(decode_duration_ms)),
                 avg_ttft_ms: a.avg_ttft_ms,
-                cost: cost_by_provider.get(&provider_id).copied().unwrap_or(0.0),
+                cost,
+                cost_usd: cost - cost_cny_usd,
+                cost_cny: cost_cny_usd * rate,
                 errors: errors_by_provider.get(&provider_id).copied().unwrap_or(0),
                 models: models_by_provider.get(&provider_id).cloned().unwrap_or_default(),
                 provider_id,
@@ -1183,7 +1218,9 @@ pub fn get_request_log(
             task_type,
             root_id,
         ) = row?;
-        let (cost, _) = cfg.cost_row(
+        // 单请求只可能按一个币种计价(币种由模型的价格条目决定),这里直接取该条目的币种
+        let currency = cfg.models.get(&model_id).and_then(|e| e.currency.clone());
+        let row_cost = cfg.row_cost(
             &model_id,
             started_at,
             input_tokens,
@@ -1208,10 +1245,11 @@ pub fn get_request_log(
                 output_tokens,
                 decode_ms_of(duration_ms, time_to_first_token_ms, output_tokens),
             ),
-            cost,
+            cost: row_cost.cost,
             project: base_name(&project),
             title,
             task_type,
+            currency,
         };
         if let Some(&gi) = group_index.get(&root_id) {
             groups[gi].requests.push(request_row);
@@ -1866,5 +1904,119 @@ mod tests {
     fn summary_smoke() {
         let s = get_summary(&conn(), &Range::default(), &pricing_path()).expect("get_summary");
         assert!(s.requests >= 0);
+    }
+
+    /// 请求日志与用量明细的费用币种:每行必须带上该模型价格条目的币种,
+    /// 否则前端只能按全局展示币种贴符号,混用两种定价时必然有一边是错的
+    #[test]
+    fn request_and_model_rows_carry_entry_currency() {
+        let conn = conn();
+        let range = Range { from: None, to: Some(now_ms() - 3_600_000) };
+        let ids = query_rows(&conn, "SELECT DISTINCT model_id FROM model_usage", &[], |r| {
+            r.get::<_, String>(0)
+        })
+        .expect("distinct model_id");
+        assert!(ids.len() >= 2, "库里至少要有两个模型才能验证币种标注");
+
+        let path = std::env::temp_dir().join("agents-dashboard-test-pricing-row-currency.json");
+        let mut cfg = PricingConfig::default();
+        for (i, id) in ids.iter().enumerate() {
+            let mut e = entry(1.0, 4.0, 0.02);
+            e.currency = Some(if i % 2 == 0 { "cny" } else { "usd" }.into());
+            cfg.models.insert(id.clone(), e);
+        }
+        pricing::save(&path, &cfg).expect("写临时价格表");
+
+        let log = get_request_log(&conn, &range, 1, 10, &path).expect("get_request_log");
+        let mut saw_cny = false;
+        let mut saw_usd = false;
+        for g in &log.groups {
+            for row in &g.requests {
+                let want = cfg.models[&row.model_id].currency.clone();
+                assert_eq!(row.currency, want, "请求行 {} 的币种应跟随价格表", row.model_id);
+                if pricing::is_cny_currency(row.currency.as_deref()) {
+                    saw_cny = true;
+                } else {
+                    saw_usd = true;
+                }
+            }
+        }
+        assert!(saw_cny && saw_usd, "本页应同时出现两种币种的请求行");
+
+        let models = get_model_stats(&conn, &range, &path).expect("get_model_stats");
+        for m in &models {
+            assert_eq!(m.currency, cfg.models[&m.model_id].currency, "模型行 {} 的币种应跟随价格表", m.model_id);
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 分组行的分币种金额:项目/供应商下混用两种定价时,两侧必须都非零且相加等于该行总额。
+    /// 只按总额贴一个符号会让另一边显示成错的金额(这正是本次要修的展示问题)
+    #[test]
+    fn grouped_rows_split_cost_by_currency() {
+        let conn = conn();
+        let range = Range { from: None, to: Some(now_ms() - 3_600_000) };
+        let ids = query_rows(&conn, "SELECT DISTINCT model_id FROM model_usage", &[], |r| {
+            r.get::<_, String>(0)
+        })
+        .expect("distinct model_id");
+        assert!(ids.len() >= 2, "库里至少要有两个模型才能验证混配分组");
+
+        let path = std::env::temp_dir().join("agents-dashboard-test-pricing-group-split.json");
+        let mut cfg = PricingConfig::default();
+        cfg.usd_cny_rate = 7.0;
+        for (i, id) in ids.iter().enumerate() {
+            // 两侧价格等价(7 元 ÷ 7 = 1 美元),只验证归属与守恒,不验证价格本身
+            let mut e = entry(7.0, 70.0, 0.7);
+            if i % 2 == 0 {
+                e.currency = Some("cny".into());
+            }
+            cfg.models.insert(id.clone(), e);
+        }
+        pricing::save(&path, &cfg).expect("写临时价格表");
+
+        let projects = get_project_stats(&conn, &range, &path).expect("get_project_stats");
+        let providers = get_provider_stats(&conn, &range, &path).expect("get_provider_stats");
+
+        let mut project_split = 0.0;
+        for p in &projects {
+            assert!(
+                (p.cost_usd + p.cost_cny / cfg.usd_cny_rate - p.cost).abs() < 1e-9,
+                "项目 {} 两侧相加应等于总额:usd={} cny={} cost={}",
+                p.name,
+                p.cost_usd,
+                p.cost_cny,
+                p.cost
+            );
+            project_split += p.cost_cny;
+        }
+        let mut provider_split = 0.0;
+        for p in &providers {
+            assert!(
+                (p.cost_usd + p.cost_cny / cfg.usd_cny_rate - p.cost).abs() < 1e-9,
+                "供应商 {} 两侧相加应等于总额:usd={} cny={} cost={}",
+                p.name,
+                p.cost_usd,
+                p.cost_cny,
+                p.cost
+            );
+            // 展开行逐模型带币种,且该模型金额归入供应商对应侧
+            for m in &p.models {
+                assert_eq!(m.currency, cfg.models[&m.model_id].currency, "展开行 {} 的币种应跟随价格表", m.model_id);
+            }
+            provider_split += p.cost_cny;
+        }
+        assert!(project_split > 0.0, "项目侧应有人币金额");
+        assert!(provider_split > 0.0, "供应商侧应有人币金额");
+        // 两侧合计互相对应:同一批请求按不同维度分组,人民币金额总额必须一致
+        assert!(
+            (project_split - provider_split).abs() < 1e-6 + provider_split * 1e-12,
+            "项目侧人币合计 {} 与供应商侧 {} 应一致",
+            project_split,
+            provider_split
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }

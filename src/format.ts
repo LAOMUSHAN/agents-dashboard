@@ -12,52 +12,21 @@ export function fmtNumber(n: number | null | undefined): string {
 }
 
 /**
- * 货币展示配置:后端所有金额一律以美元计算与存储,这里只负责折成展示币种并加符号。
- * 展示币种不再是独立选项,而是由价格表的币种推导(见 deriveDisplayCurrency)。
- * rate 是"展示折算系数"(展示美元时恒为 1),usdCny 保存汇率本身——双币种展示需要它
+ * 汇率配置:后端所有金额一律以美元计算与存储,这里只保留汇率本身。
+ * 展示币种不再有全局开关——每个费用单元格按**该行价格表条目的币种**显示
+ * (见 fmtCostIn / fmtCostSplit),否则价格表混用两种币种时总有一边贴错符号。
+ * usdCny 是"1 美元折合的人民币数",用于把美元口径金额还原成人民币金额
  */
-let money = { symbol: "$", rate: 1, usdCny: 7.1 };
+let usdCny = 7.1;
 
-export function setMoneyConfig(displayCurrency: string, usdCnyRate: number) {
-  const cny = displayCurrency?.toLowerCase() === "cny";
-  const fx = usdCnyRate > 0 && isFinite(usdCnyRate) ? usdCnyRate : 7.1;
-  money = {
-    symbol: cny ? "¥" : "$",
-    rate: cny ? fx : 1,
-    usdCny: fx,
-  };
-}
-
-/**
- * 展示币种由价格表推导:所有"已填价"(输入或输出不为 0)的模型都标了人民币价时
- * 按人民币展示,否则按美元。价格表币种变了,展示单位跟着变
- */
-type PriceLike = { input?: number; output?: number; currency?: string | null } | undefined;
-
-export function deriveDisplayCurrency(models: Record<string, PriceLike>): "usd" | "cny" {
-  const priced = Object.values(models).filter((e) => e && ((e.input ?? 0) > 0 || (e.output ?? 0) > 0));
-  if (priced.length === 0) return "usd";
-  return priced.every((e) => (e!.currency ?? "usd").toLowerCase() === "cny") ? "cny" : "usd";
-}
-
-/** 用一份定价配置设置展示币种与汇率 */
-export function setMoneyConfigFromPricing(cfg: { usdCnyRate?: number; models?: Record<string, PriceLike> }) {
-  setMoneyConfig(deriveDisplayCurrency(cfg.models ?? {}), cfg.usdCnyRate ?? 0);
+/** 用一份定价配置的汇率刷新折算系数(改完单价后由 reloadKey 触发) */
+export function setUsdCnyRate(rate: number) {
+  if (rate > 0 && isFinite(rate)) usdCny = rate;
 }
 
 /** 当前 1 美元折合的人民币数(汇率本身,与展示币种无关) */
 export function moneyRate(): number {
-  return money.usdCny;
-}
-
-/** 当前展示币种符号(图表坐标轴等直接拼字符串的场景用) */
-export function moneySymbol(): string {
-  return money.symbol;
-}
-
-/** 把美元金额折成展示币种的数值(不改符号) */
-export function toDisplayMoney(usd: number | null | undefined): number {
-  return (usd ?? 0) * money.rate;
+  return usdCny;
 }
 
 /** 美元金额不折算也不带符号:总览图表按数值绘制用 */
@@ -78,9 +47,12 @@ export function isCnyCurrency(currency: string | null | undefined): boolean {
   return c === "cny" || c === "rmb" || c === "¥";
 }
 
-/** 把美元口径金额按指定币种展示:价格估算列跟随该行自己的币种设置 */
+/**
+ * 把美元口径金额按该行价格表的币种展示——费用单元格的唯一入口。
+ * 币种来自该模型的价格条目,与「模型单价」面板逐行显示的单位必然一致
+ */
 export function fmtCostIn(usd: number | null | undefined, currency: string | null | undefined): string {
-  return isCnyCurrency(currency) ? "¥" + amount((usd ?? 0) * money.usdCny) : "$" + amount(usd);
+  return isCnyCurrency(currency) ? "¥" + amount((usd ?? 0) * usdCny) : "$" + amount(usd);
 }
 
 /** 展示一个已经是该币种的金额,不做任何换算(合计拆成"美元部分 · 人民币部分"时用) */
@@ -88,10 +60,17 @@ export function fmtAmount(amount_: number | null | undefined, currency: "usd" | 
   return (currency === "cny" ? "¥" : "$") + amount(amount_);
 }
 
-export function fmtCost(n: number | null | undefined): string {
-  const v = toDisplayMoney(n);
-  if (v !== 0 && Math.abs(v) < 0.01) return money.symbol + v.toFixed(4);
-  return money.symbol + v.toFixed(2);
+/**
+ * 分币种合计:两侧各是真实金额(不是同一总额的两种换算),人民币在前。
+ * 项目/供应商这类分组下可能同时有人民币与美元定价的模型,单贴一个符号必然错一边;
+ * 只有一侧非零时省略另一侧,免得并排出现"$0.00"这种噪声
+ */
+export function fmtCostSplit(usd: number | null | undefined, cny: number | null | undefined): string {
+  const u = usd ?? 0;
+  const c = cny ?? 0;
+  if (c === 0) return "$" + amount(u);
+  if (u === 0) return "¥" + amount(c);
+  return `¥${amount(c)} · $${amount(u)}`;
 }
 
 /** 占比:part/total,total 为 0 时返回 "-" */

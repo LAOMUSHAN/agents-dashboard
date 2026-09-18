@@ -140,7 +140,7 @@ pub fn is_cny_currency(currency: Option<&str>) -> bool {
 
 impl PricingConfig {
     /// 价格表里的数字按其币种折算成美元的系数(人民币价 ÷ 汇率)
-    fn currency_ratio(&self, currency: Option<&str>) -> f64 {
+    pub(crate) fn currency_ratio(&self, currency: Option<&str>) -> f64 {
         if is_cny_currency(currency) && self.usd_cny_rate > 0.0 {
             1.0 / self.usd_cny_rate
         } else {

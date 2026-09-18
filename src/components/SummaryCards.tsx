@@ -1,5 +1,5 @@
 import type { Summary } from "../../shared/types";
-import { fmtAmount, fmtHitRate, fmtSpeed, fmtTokens } from "../format";
+import { fmtCostSplit, fmtHitRate, fmtSpeed, fmtTokens } from "../format";
 
 type CardItem = {
   label: string;
@@ -32,8 +32,9 @@ export function SummaryCards({ summary }: { summary: Summary | null }) {
         },
         {
           label: "估算费用",
-          // 两个币种各有各的真实合计,并排放在一行;不做"折算成单一币种再相加"
-          value: `${fmtAmount(summary.costCny, "cny")} · ${fmtAmount(summary.costUsd, "usd")}`,
+          // 两个币种各有各的真实合计,并排放在一行;不做"折算成单一币种再相加"。
+          // 只有一侧有值时省略另一侧,免得出现"¥0.00"这种看着像 bug 的空账
+          value: fmtCostSplit(summary.costUsd, summary.costCny),
           hint: summary.unpricedModels.length > 0 ? `${summary.unpricedModels.length} 个模型未配置单价` : "",
           warn: summary.unpricedModels.length > 0,
         },

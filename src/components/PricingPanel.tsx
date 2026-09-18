@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { PeakWindow, PriceEntry, PricingConfig } from "../../shared/types";
 import { api, type Range } from "../api";
-import { fmtAmount, fmtCostIn, isCnyCurrency, moneyRate, setMoneyConfigFromPricing } from "../format";
+import { fmtAmount, fmtCostIn, isCnyCurrency, moneyRate, setUsdCnyRate } from "../format";
 import { Panel } from "./ui/panel";
 import { cn } from "@/lib/utils";
 
@@ -352,8 +352,9 @@ export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => 
   }, [estSeq]);
 
   /**
-   * 配置改动(汇率/峰谷时段):改完即落盘,并按价格表币种重算全局展示单位。
-   * fmtCost 读模块级配置,配合 onSaved() 触发数据重拉,总览/明细/日志等页面同步换符号
+   * 配置改动(汇率/峰谷时段):改完即落盘,并刷新模块级汇率。
+   * 各页面的费用符号取自**该行价格表条目的币种**(不是全局开关),所以改币种或汇率后
+   * 由 onSaved() 触发数据重拉,总览/明细/日志等页面按新配置重算
    */
   /** 汇率提交:非法或没变就还原输入框;变了才落盘,并按新汇率整表重算估算 */
   const commitRate = (text: string) => {
@@ -376,7 +377,7 @@ export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => 
         .savePricing({ ...cfg, models: buildModels(cfg) })
         .then((saved) => {
           setConfig(saved);
-          setMoneyConfigFromPricing(saved);
+          setUsdCnyRate(saved.usdCnyRate);
           // 汇率影响人民币价行的折算金额:等落盘后再重算,拿到的才是新价
           if (reestimateAll) refreshEstimate(true);
           onSaved();
@@ -419,7 +420,7 @@ export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => 
     try {
       const saved = await api.savePricing({ ...config, models: buildModels(config) });
       setConfig(saved);
-      setMoneyConfigFromPricing(saved);
+      setUsdCnyRate(saved.usdCnyRate);
       // 后端可能归一化(如峰谷倍率 ≤1 被清空),按落盘结果重算估算
       refreshEstimate(true);
       onSaved();

@@ -223,6 +223,9 @@ pub struct ModelStat {
     /// 该模型平均首 token 延迟(ms);无 TTFT 数据时为 None
     pub avg_ttft_ms: Option<i64>,
     pub cost: f64,
+    /// 该模型价格表条目的币种("cny"/"usd";缺省 None 按美元)。费用列据此决定展示符号,
+    /// 与「模型单价」面板逐行显示的币种一致
+    pub currency: Option<String>,
     pub priced: bool,
     /// 该时间范围内 status='error' 的请求数(含被主统计过滤掉的非 completed 行)
     pub errors: i64,
@@ -268,6 +271,10 @@ pub struct ProjectStat {
     /// 该目录平均首 token 延迟(ms);无 TTFT 数据时为 None
     pub avg_ttft_ms: Option<i64>,
     pub cost: f64,
+    /// 分币种合计:该目录下按人民币定价的模型费用(人民币)与按美元定价的费用(美元)。
+    /// 两者各自是真实金额,不是同一个总额的两种换算——目录下可能混用两种定价
+    pub cost_usd: f64,
+    pub cost_cny: f64,
     /// 该时间范围内 status='error' 的请求数(含被主统计过滤掉的非 completed 行)
     pub errors: i64,
 }
@@ -291,6 +298,8 @@ pub struct ProviderModelStat {
     /// 该模型在该供应商下的平均首 token 延迟(ms);无 TTFT 数据时为 None
     pub avg_ttft_ms: Option<i64>,
     pub cost: f64,
+    /// 该模型价格表条目的币种;缺省 None 按美元。费用列展示符号与「模型单价」一致
+    pub currency: Option<String>,
 }
 
 /// 按供应商(provider_id)汇总的统计;name 来自 zcode 配置文件,未收录时等于 provider_id
@@ -306,13 +315,17 @@ pub struct ProviderStat {
     pub cache_read_tokens: i64,
     pub cache_create_tokens: i64,
     pub total_tokens: i64,
-    /// 该供应商加权生成速度(tok/s);无耗时数据时为 None
+    /// 该供应商加权生成速度(tok/s);无耗时数据时为 null
     pub tokens_per_sec: Option<f64>,
-    /// 该供应商解码速度(tok/s),口径同上;无配对数据时为 None
+    /// 该供应商解码速度(tok/s),口径同上;无耗时数据时为 null
     pub decode_tokens_per_sec: Option<f64>,
-    /// 该供应商平均首 token 延迟(ms);无 TTFT 数据时为 None
+    /// 该供应商平均首 token 延迟(ms);无 TTFT 数据时为 null
     pub avg_ttft_ms: Option<i64>,
     pub cost: f64,
+    /// 分币种合计:该供应商下人民币定价模型费用(人民币)与美元定价模型费用(美元),
+    /// 各自是真实金额(一个供应商可能同时提供两种币种定价的模型)
+    pub cost_usd: f64,
+    pub cost_cny: f64,
     /// 该时间范围内 status='error' 的请求数(含被主统计过滤掉的非 completed 行)
     pub errors: i64,
     /// 该供应商下各模型的明细,按总 tokens 降序
@@ -343,6 +356,9 @@ pub struct RequestRow {
     pub title: Option<String>,
     /// session.task_type;'subagent_child' 表示该行来自子代理会话(zcode-Explore 等)
     pub task_type: Option<String>,
+    /// 该行模型价格条目的币种("cny"/"usd";缺省 None 按美元)。
+    /// 费用列据此决定符号,与「模型单价」面板同一模型显示的单位一致
+    pub currency: Option<String>,
 }
 
 /// 请求日志分组 = 一个根会话及其子代理会话的全部请求

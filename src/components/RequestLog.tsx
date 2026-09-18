@@ -1,7 +1,18 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import type { RequestGroup, RequestLogResponse, RequestRow } from "../../shared/types";
 import { api, type Range } from "../api";
-import { fmtCost, fmtDuration, fmtHitRate, fmtNumber, fmtSeconds, fmtTimestamp, fmtSpeed, fmtTokens } from "../format";
+import {
+  fmtCostIn,
+  fmtCostSplit,
+  fmtDuration,
+  fmtHitRate,
+  fmtNumber,
+  fmtSeconds,
+  fmtTimestamp,
+  fmtSpeed,
+  fmtTokens,
+  isCnyCurrency,
+} from "../format";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Panel } from "./ui/panel";
 import { StatBadge } from "./ui/stat-badge";
@@ -15,7 +26,9 @@ const isSubagentRow = (r: RequestRow) => r.taskType === "subagent_child";
 function groupStats(requests: RequestRow[]) {
   const input = requests.reduce((s, r) => s + r.inputTokens, 0);
   const output = requests.reduce((s, r) => s + r.outputTokens, 0);
-  const cost = requests.reduce((s, r) => s + r.cost, 0);
+  // 一个会话里可能既有人民币价模型也有美元价模型,两侧分开累计才能各贴各的符号
+  const costUsd = requests.reduce((s, r) => (isCnyCurrency(r.currency) ? s : s + r.cost), 0);
+  const costCny = requests.reduce((s, r) => (isCnyCurrency(r.currency) ? s + r.cost : s), 0);
   const cacheRead = requests.reduce((s, r) => s + r.cacheReadTokens, 0);
   const cacheCreate = requests.reduce((s, r) => s + r.cacheCreateTokens, 0);
   const duration = requests.reduce((s, r) => s + (r.durationMs ?? 0), 0);
@@ -40,7 +53,7 @@ function groupStats(requests: RequestRow[]) {
   const running = requests.some((r) => r.status === "running");
   const cancelled = requests.some((r) => r.status === "cancelled");
   const models = [...new Set(requests.map((r) => r.modelId))];
-  return { input, output, cost, cacheRead, cacheCreate, duration, decodeDuration, decodeOutput, avgTtft, errors, running, cancelled, models };
+  return { input, output, costUsd, costCny, cacheRead, cacheCreate, duration, decodeDuration, decodeOutput, avgTtft, errors, running, cancelled, models };
 }
 
 const TH_NUM = "px-2 py-2 text-right text-[11px] font-medium text-muted-foreground whitespace-nowrap";
@@ -81,7 +94,9 @@ function GroupHead({ group, open }: { group: RequestGroup; open: boolean }) {
       <td className={TD_NUM}>{fmtSpeed(s.duration > 0 ? s.output / (s.duration / 1000) : null)}</td>
       <td className={TD_NUM}>{fmtSpeed(s.decodeDuration > 0 ? s.decodeOutput / (s.decodeDuration / 1000) : null)}</td>
       <td className={TD_NUM}>{fmtSeconds(s.avgTtft)}</td>
-      <td className={TD_NUM}>{fmtCost(s.cost)}</td>
+      <td className={TD_NUM} title={s.costUsd > 0 && s.costCny > 0 ? "该会话混用两种定价:¥ 侧与 $ 侧各自是真实金额" : undefined}>
+        {fmtCostSplit(s.costUsd, s.costCny)}
+      </td>
     </>
   );
 }
@@ -204,7 +219,7 @@ export function RequestLog({ range, reloadKey }: { range: Range; reloadKey: numb
                           <td className={TD_NUM}>{fmtSpeed(r.tokensPerSec)}</td>
                           <td className={TD_NUM}>{fmtSpeed(r.decodeTokensPerSec)}</td>
                           <td className={TD_NUM}>{fmtSeconds(r.timeToFirstTokenMs)}</td>
-                          <td className={TD_NUM}>{fmtCost(r.cost)}</td>
+                          <td className={TD_NUM}>{fmtCostIn(r.cost, r.currency)}</td>
                         </tr>
                       );
                     })}

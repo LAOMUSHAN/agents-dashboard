@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { useEffect, useState } from "react";
 import type { Summary } from "../../shared/types";
 import { api } from "../api";
-import { fmtCost, setMoneyConfigFromPricing } from "../format";
+import { fmtCostSplit, setUsdCnyRate } from "../format";
 import { Maximize2, TriangleAlert, X } from "lucide-react";
 import "../tailwind.css";
 import "../styles.css";
@@ -35,10 +35,10 @@ function MiniApp() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // 展示币种:迷你窗独立入口,同样按配置折算(与主窗口保持一致)
+  // 汇率:迷你窗独立入口,同样按配置刷新折算系数(与主窗口保持一致)
   useEffect(() => {
     api.pricing().then(
-      (cfg) => setMoneyConfigFromPricing(cfg),
+      (cfg) => setUsdCnyRate(cfg.usdCnyRate),
       () => undefined,
     );
   }, []);
@@ -83,7 +83,7 @@ function MiniApp() {
           <span>入 {fmtCompact(summary?.inputTokens)}</span>
           <span>出 {fmtCompact(summary?.outputTokens)}</span>
           <span>缓存 {fmtCompact(summary ? summary.cacheReadTokens + summary.cacheCreateTokens : null)}</span>
-          <span className="mini-cost">{fmtCost(summary?.cost)}</span>
+          <span className="mini-cost">{fmtCostSplit(summary?.costUsd, summary?.costCny)}</span>
         </div>
       )}
       {summary && summary.unpricedModels.length > 0 && (

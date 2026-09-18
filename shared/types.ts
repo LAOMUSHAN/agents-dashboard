@@ -121,6 +121,8 @@ export interface ModelStat {
   /** 该模型平均首 token 延迟(ms);无 TTFT 数据时为 null */
   avgTtftMs: number | null;
   cost: number;
+  /** 该模型价格条目的币种("cny"/"usd";缺省 null 按美元)。费用列据此显示符号,与「模型单价」逐行单位一致 */
+  currency?: string | null;
   priced: boolean;
   /** 该时间范围内 status='error' 的请求数(含被主统计过滤掉的非 completed 行);0 时前端显示 "—" */
   errors: number;
@@ -143,6 +145,10 @@ export interface ProjectStat {
   /** 该目录平均首 token 延迟(ms);无 TTFT 数据时为 null */
   avgTtftMs: number | null;
   cost: number;
+  /** 该目录下按美元定价的模型费用(美元) */
+  costUsd: number;
+  /** 该目录下按人民币定价的模型费用(人民币)。目录可能混用两种定价,两侧各自是真实金额 */
+  costCny: number;
   /** 该时间范围内 status='error' 的请求数(含被主统计过滤掉的非 completed 行);0 时前端显示 "—" */
   errors: number;
 }
@@ -164,6 +170,8 @@ export interface ProviderModelStat {
   /** 该模型在该供应商下的平均首 token 延迟(ms);无 TTFT 数据时为 null */
   avgTtftMs: number | null;
   cost: number;
+  /** 该模型价格条目的币种;缺省 null 按美元。费用列符号与「模型单价」一致 */
+  currency?: string | null;
 }
 
 /** 按供应商(provider_id)汇总的统计;name 来自 zcode 配置文件,未收录时等于 providerId */
@@ -184,6 +192,10 @@ export interface ProviderStat {
   /** 该供应商平均首 token 延迟(ms);无 TTFT 数据时为 null */
   avgTtftMs: number | null;
   cost: number;
+  /** 该供应商下按美元定价的模型费用(美元) */
+  costUsd: number;
+  /** 该供应商下按人民币定价的模型费用(人民币);同一供应商可能混用两种定价 */
+  costCny: number;
   /** 该时间范围内 status='error' 的请求数(含被主统计过滤掉的非 completed 行) */
   errors: number;
   /** 该供应商下各模型的明细,按总 tokens 降序 */
@@ -212,6 +224,8 @@ export interface RequestRow {
   title: string | null;
   /** session.task_type;'subagent_child' = 该行来自子代理会话(zcode-Explore 等) */
   taskType?: string | null;
+  /** 该行模型价格条目的币种("cny"/"usd";缺省 null 按美元)。费用列据此显示符号,与「模型单价」一致 */
+  currency?: string | null;
 }
 
 /** 请求日志的一个分组 = 一个根会话(主会话)及其子代理会话的全部请求 */

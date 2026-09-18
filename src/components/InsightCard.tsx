@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Lightbulb, RefreshCw as SwapIcon } from "lucide-react";
 import type { ModelStat, ProviderStat, Summary } from "../../shared/types";
-import { fmtAmount, fmtCost, fmtNumber, fmtPercent, fmtSpeed, fmtTokens } from "../format";
+import { fmtAmount, fmtCostSplit, fmtNumber, fmtPercent, fmtSpeed, fmtTokens } from "../format";
 import { StatBadge } from "./ui/stat-badge";
 
 type Insight = { text: string; tone?: "warn" | "info" };
@@ -40,10 +40,14 @@ export function InsightCard({
       });
     }
 
-    // 费用摘要
+    // 费用摘要:区间内可能混用两种定价,两侧各贴各的币种,不做折算后相加
     if (summary.cost > 0) {
+      const n = summary.requests;
       list.push({
-        text: `区间估算费用 ${fmtCost(summary.cost)},共 ${fmtNumber(summary.requests)} 次请求,平均单次 ${fmtCost(summary.cost / summary.requests)}。`,
+        text: `区间估算费用 ${fmtCostSplit(summary.costUsd, summary.costCny)},共 ${fmtNumber(n)} 次请求,平均单次 ${fmtCostSplit(
+          n > 0 ? summary.costUsd / n : 0,
+          n > 0 ? summary.costCny / n : 0,
+        )}。`,
       });
     }
 

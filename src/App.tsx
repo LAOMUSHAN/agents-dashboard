@@ -16,7 +16,7 @@ import type {
   TrendPoint,
 } from "../shared/types";
 import { api } from "./api";
-import { fmtNumber, setMoneyConfigFromPricing } from "./format";
+import { fmtNumber, setUsdCnyRate } from "./format";
 import { cn } from "@/lib/utils";
 import { ActivityHeatmap } from "./components/ActivityHeatmap";
 import { AgentStatsPanel } from "./components/AgentStatsPanel";
@@ -155,12 +155,12 @@ export default function App() {
     setRefreshSecState(sec);
   };
 
-  // 展示币种:金额统一以美元存储,前端按配置折算成 ¥/$(改完单价后由 reloadKey 重新拉取)
+  // 汇率:金额统一以美元存储,各费用单元格再按该行价格表的币种换算(改完单价后由 reloadKey 重新拉取)
   useEffect(() => {
     api
       .pricing()
-      .then((cfg) => setMoneyConfigFromPricing(cfg))
-      .catch(() => setMoneyConfigFromPricing({ usdCnyRate: 1, models: {} }));
+      .then((cfg) => setUsdCnyRate(cfg.usdCnyRate))
+      .catch(() => undefined);
   }, [reloadKey]);
 
   // 定时刷新:到点触发一次重新加载

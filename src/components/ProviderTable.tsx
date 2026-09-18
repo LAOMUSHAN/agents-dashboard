@@ -1,6 +1,6 @@
 import { Fragment, useState } from "react";
 import type { ModelStat, ProjectStat, ProviderStat } from "../../shared/types";
-import { fmtCost, fmtHitRate, fmtNumber, fmtSeconds, fmtSpeed, fmtTokens } from "../format";
+import { fmtCostIn, fmtCostSplit, fmtHitRate, fmtNumber, fmtSeconds, fmtSpeed, fmtTokens } from "../format";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Panel } from "./ui/panel";
 import { StatBadge } from "./ui/stat-badge";
@@ -39,7 +39,9 @@ function HeadRow({ label }: { label: string }) {
       <th className={TH_NUM}>总速度</th>
       <th className={TH_NUM}>解码速度</th>
       <th className={TH_NUM}>首tok</th>
-      <th className={TH_NUM}>费用</th>
+      <th className={TH_NUM} title="费用按各模型价格表的币种显示;供应商/项目行可能混用两种定价,¥ 与 $ 两侧各自是真实金额">
+        费用
+      </th>
       <th className={TH_NUM}>错误</th>
     </tr>
   );
@@ -144,7 +146,7 @@ export function ProviderTable({
                       <td className={TD_NUM}>{fmtSpeed(p.tokensPerSec)}</td>
                       <td className={TD_NUM}>{fmtSpeed(p.decodeTokensPerSec)}</td>
                       <td className={TD_NUM}>{fmtSeconds(p.avgTtftMs)}</td>
-                      <td className={TD_NUM}>{fmtCost(p.cost)}</td>
+                      <td className={TD_NUM}>{fmtCostSplit(p.costUsd, p.costCny)}</td>
                       <td className={TD_NUM}>
                         {p.errors > 0 ? (
                           <StatBadge tone="err">{fmtNumber(p.errors)}</StatBadge>
@@ -174,7 +176,7 @@ export function ProviderTable({
                                   <td className={TD_NUM}>{fmtSpeed(m.tokensPerSec)}</td>
                                   <td className={TD_NUM}>{fmtSpeed(m.decodeTokensPerSec)}</td>
                                   <td className={TD_NUM}>{fmtSeconds(m.avgTtftMs)}</td>
-                                  <td className={TD_NUM}>{fmtCost(m.cost)}</td>
+                                  <td className={TD_NUM}>{fmtCostIn(m.cost, m.currency)}</td>
                                   <td className={TD_NUM}>
                                     <span className="text-muted-foreground/60">—</span>
                                   </td>
@@ -210,7 +212,7 @@ export function ProviderTable({
                     <td className={TD_NUM}>{fmtSpeed(m.tokensPerSec)}</td>
                     <td className={TD_NUM}>{fmtSpeed(m.decodeTokensPerSec)}</td>
                     <td className={TD_NUM}>{fmtSeconds(m.avgTtftMs)}</td>
-                    <td className={TD_NUM}>{fmtCost(m.cost)}</td>
+                    <td className={TD_NUM}>{fmtCostIn(m.cost, m.currency)}</td>
                     <td className={TD_NUM}>
                       {m.errors > 0 ? (
                         <StatBadge tone="err">{fmtNumber(m.errors)}</StatBadge>
@@ -241,7 +243,7 @@ export function ProviderTable({
                     <td className={TD_NUM}>{fmtSpeed(p.tokensPerSec)}</td>
                     <td className={TD_NUM}>{fmtSpeed(p.decodeTokensPerSec)}</td>
                     <td className={TD_NUM}>{fmtSeconds(p.avgTtftMs)}</td>
-                    <td className={TD_NUM}>{fmtCost(p.cost)}</td>
+                    <td className={TD_NUM}>{fmtCostSplit(p.costUsd, p.costCny)}</td>
                     <td className={TD_NUM}>
                       {p.errors > 0 ? (
                         <StatBadge tone="err">{fmtNumber(p.errors)}</StatBadge>
