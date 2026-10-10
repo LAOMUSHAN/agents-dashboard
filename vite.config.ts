@@ -3,7 +3,6 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
-import { fileURLToPath, URL } from "node:url";
 
 const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
 
@@ -33,12 +32,5 @@ export default defineConfig({
     target: "safari13",
     minify: "esbuild",
     sourcemap: false,
-    rollupOptions: {
-      // 双入口:主窗口 + 统计浮窗(mini 窗口 url 指向 mini.html)
-      input: {
-        main: fileURLToPath(new URL("./index.html", import.meta.url)),
-        mini: fileURLToPath(new URL("./mini.html", import.meta.url)),
-      },
-    },
   },
 });

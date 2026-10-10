@@ -332,7 +332,7 @@ fn remove_provider(id: String) -> Result<types::ZProviderConfig, String> {
     zconfig::update_default(|doc| zconfig::remove_provider(doc, &id))
 }
 
-/// 展开主窗口;胶囊与主窗口互斥,展开时收起胶囊。
+/// 唤醒并聚焦主窗口。
 /// show() 在 Windows 上只是 ShowWindow(SW_SHOW),对最小化的窗口不生效(会保持最小化状态,
 /// 停在最小化时的小尺寸位置),必须先 unminimize
 fn open_main(app: &tauri::AppHandle) {
@@ -341,75 +341,6 @@ fn open_main(app: &tauri::AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
-    if let Some(m) = app.get_webview_window("mini") {
-        let _ = m.hide();
-        save_mini_position(app);
-    }
-}
-
-/// 收起到胶囊;主窗口可见则一并隐藏
-fn open_mini(app: &tauri::AppHandle) {
-    if let Some(m) = app.get_webview_window("mini") {
-        let _ = m.show();
-        let _ = m.set_focus();
-    }
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.hide();
-    }
-}
-
-/// 位置落盘。macOS 上 cmd+Q 走系统 terminate,tao 不发退出事件,
-/// 插件自身只在 RunEvent::Exit 写盘(实际永远等不到),必须在移动/收起时主动保存
-fn save_mini_position(app: &tauri::AppHandle) {
-    use tauri_plugin_window_state::AppHandleExt;
-    let _ = app.save_window_state(tauri_plugin_window_state::StateFlags::POSITION);
-}
-
-/// WKWebView 实例级去底:配置对象上的 drawsBackground(wry 创建时已设)不足,
-/// 圆角外仍残留方形白底;须再对实例设 drawsBackground=false 和
-/// underPageBackgroundColor=clear(后者默认系统白,drawsBackground 关掉后它就是露出的底色)
-#[cfg(target_os = "macos")]
-fn force_webview_transparent(window: &tauri::WebviewWindow) {
-    use objc2_app_kit::NSColor;
-    let _ = window.with_webview(|wv| unsafe {
-        let wk = &*(wv.inner() as *mut objc2::runtime::AnyObject);
-        let no = objc2_foundation::NSNumber::numberWithBool(false);
-        let _: () = objc2::msg_send![
-            wk,
-            setValue: &*no,
-            forKey: objc2_foundation::ns_string!("drawsBackground")
-        ];
-        let clear = NSColor::clearColor();
-        let _: () = objc2::msg_send![wk, setUnderPageBackgroundColor: &*clear];
-
-        // NSWindow 加固:clear 背景 + 非透明,防 tao 时序问题
-        let ns_ptr = wv.ns_window();
-        if !ns_ptr.is_null() {
-            let ns_window = &*(ns_ptr as *mut objc2_app_kit::NSWindow);
-            ns_window.setOpaque(false);
-            ns_window.setBackgroundColor(Some(&clear));
-        }
-    });
-}
-
-/// 拖动写盘节流:Moved 高频触发,限每 500ms 落一次盘
-struct PosSaveThrottle(Mutex<std::time::Instant>);
-
-#[tauri::command]
-fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
-    open_main(&app);
-    Ok(())
-}
-
-#[tauri::command]
-fn set_mini_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
-    if visible {
-        open_mini(&app);
-    } else if let Some(m) = app.get_webview_window("mini") {
-        m.hide().map_err(|e| e.to_string())?;
-        save_mini_position(&app);
-    }
-    Ok(())
 }
 
 pub fn run() {
@@ -422,37 +353,11 @@ pub fn run() {
                 open_main(app);
             }),
         )
-        .plugin(
-            // 浮窗只记位置:resizable:false 尺寸由 conf 定,记忆旧 SIZE 会覆盖新配置;
-            // 也不能存 visible(否则浮窗被隐藏后重启会一个窗口都不出现);
-            // 主窗口不归插件管,大小行为与单窗口时代一致
-            tauri_plugin_window_state::Builder::new()
-                .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
-                .with_denylist(&["main"])
-                .build(),
-        )
         .on_window_event(|window, event| match event {
-            // 主窗口点关闭 = 收回到胶囊;胶囊点关闭 = 隐藏(托盘/Dock 唤回);退出走托盘菜单
+            // 主窗口点关闭 = 隐藏至系统托盘后台运行;退出走托盘菜单
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                match window.label() {
-                    "main" => open_mini(window.app_handle()),
-                    _ => {
-                        let _ = window.hide();
-                        save_mini_position(window.app_handle());
-                    }
-                }
-            }
-            // 胶囊拖动时节流落盘,任何退出方式(含强杀)都不丢位置
-            tauri::WindowEvent::Moved(_) if window.label() == "mini" => {
-                let app = window.app_handle();
-                let throttle = app.state::<PosSaveThrottle>();
-                let mut last = throttle.0.lock().unwrap();
-                if last.elapsed() >= std::time::Duration::from_millis(500) {
-                    *last = std::time::Instant::now();
-                    drop(last);
-                    save_mini_position(app);
-                }
+                let _ = window.hide();
             }
             _ => {}
         })
@@ -469,39 +374,30 @@ pub fn run() {
                 db_path,
                 pricing_path,
             });
-            app.manage(PosSaveThrottle(Mutex::new(std::time::Instant::now())));
 
-            // 透明胶囊:补设 WKWebView 实例级 drawsBackground,消除圆角外方形白底
-            #[cfg(target_os = "macos")]
-            if let Some(w) = app.get_webview_window("mini") {
-                force_webview_transparent(&w);
-            }
-
-            // 菜单栏托盘:浮窗被隐藏后唯一的找回入口,也承担显式退出
-            let show_mini = MenuItem::with_id(app, "show_mini", "显示浮窗", true, None::<&str>)?;
+            // 菜单栏托盘:主窗口关闭隐藏后的呼回入口与显式退出
             let show_main = MenuItem::with_id(app, "show_main", "打开主窗口", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 Agents Dashboard", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_mini, &show_main, &quit])?;
+            let menu = Menu::with_items(app, &[&show_main, &quit])?;
             TrayIconBuilder::with_id("tray")
                 .icon(app.default_window_icon().expect("missing default icon").clone())
                 .tooltip("Agents Dashboard")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show_mini" => open_mini(app),
                     "show_main" => open_main(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    // 左键点托盘图标收起到胶囊;菜单走右键
+                    // 左键点托盘图标直接呼出/聚焦主窗口;菜单走右键
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
                     {
-                        open_mini(tray.app_handle());
+                        open_main(tray.app_handle());
                     }
                 })
                 .build(app)?;
@@ -538,31 +434,15 @@ pub fn run() {
             add_provider_models,
             add_provider,
             remove_provider,
-            get_meta,
-            show_main_window,
-            set_mini_visible
+            get_meta
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| match event {
-            // 位置落盘兜底:托盘退出(app.exit)会经过这里;cmd+Q 靠拖动/收起时的主动保存
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                save_mini_position(app);
-            }
-            // macOS 点 Dock 图标:主窗口开着就聚焦它,否则收回到胶囊
+        .run(|_app, event| match event {
+            // macOS 点 Dock 图标:唤起并聚焦主窗口
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                let main_visible = app
-                    .get_webview_window("main")
-                    .and_then(|w| w.is_visible().ok())
-                    .unwrap_or(false);
-                if main_visible {
-                    if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.set_focus();
-                    }
-                } else {
-                    open_mini(app);
-                }
+                open_main(_app);
             }
             _ => {}
         });

@@ -59,12 +59,6 @@ Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你�
 
 ![模型单价](docs/images/pricing.png)
 
-### 迷你浮窗
-
-主窗口「收起」后变为置顶迷你胶囊，实时显示今日的 tokens 与费用；左侧圆点是状态指示，右侧按钮唤起主窗口或隐藏胶囊。
-
-![迷你浮窗](docs/images/mini-window.png)
-
 ## 功能特性
 
 - **时间范围**：今天 / 昨天 / 近 7 天 / 近 30 天 / 全部 / 自定义日期区间
@@ -76,7 +70,7 @@ Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你�
 - **请求日志**：按会话分组的树形明细，子代理请求缩进挂在父会话下，按会话分页
 - **供应商与模型**：面板内管理 ZCode 供应商配置（写前自动备份），并维护每个模型的单价
 - **费用估算**：逐请求计价、按模型分币种、逐模型峰谷与长上下文加价、缓存节省估算（见下文口径说明）
-- **迷你浮窗**：置顶胶囊实时显示今日用量，可随时切回主窗口
+- **系统托盘常驻**：主窗口关闭时自动隐藏至托盘后台运行，单击托盘图标即可快速唤回
 - **单实例保护**：重复启动只会唤起已有窗口，避免多个实例互相覆盖配置
 
 ## 费用估算口径
@@ -185,12 +179,12 @@ ZCODE_DB_PATH=/path/to/other.db npx tauri dev
 
 - 前端：Vite + React + TypeScript + Tailwind CSS v4 + shadcn 风格令牌 + Recharts + Radix UI
 - 后端：Tauri 2 + Rust（rusqlite 只读直查，无 HTTP 层），前端通过 `invoke` 调用
-- 桌面能力：单实例（`tauri-plugin-single-instance`）、窗口状态记忆、系统托盘、无边框置顶迷你窗
+- 桌面能力：单实例保护（`tauri-plugin-single-instance`）、系统托盘常驻守护
 
 ## 目录结构
 
 ```
-src/          前端页面与组件（components/）；mini/ 是迷你浮窗入口（mini.html 双入口构建）
+src/          前端页面与组件（components/）
 src-tauri/    Rust 后端：db.rs（只读连接）、queries.rs（SQL 聚合）、pricing.rs（单价与计费）、
               providers.rs / zconfig.rs（ZCode 供应商配置读写）、lib.rs（invoke 命令注册）
 shared/       前后端共享类型（前端直接引用，Rust 端 types.rs 与之对应）

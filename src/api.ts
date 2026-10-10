@@ -84,7 +84,4 @@ export const api = {
   fetchProviderModels: (id: string) => invoke<string[]>("fetch_provider_models", { id }),
   addProviderModels: (id: string, models: string[]) =>
     invoke<ZProviderConfig>("add_provider_models", { id, models }),
-  // 窗口控制:浮窗 ↔ 主窗口互相唤起
-  showMainWindow: () => invoke<void>("show_main_window"),
-  setMiniVisible: (visible: boolean) => invoke<void>("set_mini_visible", { visible }),
 };
