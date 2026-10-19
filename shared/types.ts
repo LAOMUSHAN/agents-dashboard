@@ -245,6 +245,24 @@ export interface RequestLogResponse {
   pageSize: number;
 }
 
+/** 一次刷新返回的全部面板数据(后端 get_dashboard 合并命令,同一数据库快照) */
+export interface DashboardPayload {
+  summary: Summary;
+  trend: TrendPoint[];
+  modelTrend: ModelTrendPoint[];
+  providerTrend: ProviderTrendPoint[];
+  models: ModelStat[];
+  projects: ProjectStat[];
+  providers: ProviderStat[];
+  tools: ToolStat[];
+  agents: AgentStat[];
+  errors: ErrorStats;
+  latency: LatencyStat[];
+  activity: HeatCell[];
+  activityDaily: DailyActivityPoint[];
+  monthlyTrend: MonthPoint[];
+}
+
 /** 单个工具的调用统计(tool_usage 表) */
 export interface ToolStat {
   toolName: string;

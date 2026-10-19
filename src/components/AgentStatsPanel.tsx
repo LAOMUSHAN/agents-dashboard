@@ -39,11 +39,11 @@ export function AgentStatsPanel({ stats }: { stats: AgentStat[] }) {
           </thead>
           <tbody>
             {stats.map((a) => (
-              <tr key={a.agent ?? "__none__"} className="border-b border-border/60 transition-colors last:border-0 hover:bg-muted/50">
+              <tr key={a.agent ?? "__none__"} className="border-b border-border/60 transition-colors last:border-0 hover:bg-accent/50">
                 <td className="relative px-2 py-1.5">
                   <div
                     aria-hidden
-                    className="absolute inset-y-1 left-2 rounded-sm bg-violet-500/12"
+                    className="absolute inset-y-1 left-2 rounded-sm bg-clay-soft"
                     style={{ width: `${maxRequests ? (a.requests / maxRequests) * 92 : 0}%` }}
                   />
                   <span className={"relative font-mono text-xs " + (isMain(a.agent) ? "font-semibold" : "")}>

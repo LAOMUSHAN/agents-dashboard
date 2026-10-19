@@ -1,28 +1,126 @@
 mod db;
+mod error;
 mod pricing;
 mod providers;
 mod queries;
+mod sources;
 mod types;
 mod zconfig;
 
+use error::AppError;
+use sources::DataSource;
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
-pub struct AppState {
+/// 进程内共享状态；命令与后台任务都拿 Arc<Inner>，避免跨线程移动 MutexGuard。
+pub struct Inner {
+    /// 数据源抽象：目前只有 zcode，DSH 在 P6 接入
+    source: Box<dyn sources::DataSource>,
     /// 只读连接;打开失败(如库不存在)时为 None,命令返回带路径的错误信息
     db: Mutex<Option<rusqlite::Connection>>,
-    db_path: PathBuf,
     pricing_path: PathBuf,
 }
 
-impl AppState {
-    fn db_error(&self) -> String {
-        format!("无法打开 zcode 数据库:{}", self.db_path.display())
+#[derive(Clone)]
+pub struct AppState {
+    inner: Arc<Inner>,
+}
+
+impl std::ops::Deref for AppState {
+    type Target = Inner;
+    fn deref(&self) -> &Inner {
+        &self.inner
     }
+}
+
+impl Inner {
+    fn db_error(&self) -> String {
+        format!(
+            "无法打开 {} 数据库:{}",
+            self.source.kind().label(),
+            self.source.db_path().display()
+        )
+    }
+
+    /// 一次查询返回仪表盘需要的全部数据；同步实现，由命令层放到阻塞线程池执行。
+    /// 14 条查询各自独立只读连接并行跑（SQLite WAL 支持多读者），
+    /// 墙钟时间从「14 条相加」降到「最慢的一条」。
+    fn query_dashboard(&self, range: &types::Range) -> Result<types::DashboardPayload, AppError> {
+        let p = &self.pricing_path;
+        let names = self.source.provider_names();
+        let mut conns = Vec::with_capacity(14);
+        for _ in 0..14 {
+            conns.push(self.source.open()?);
+        }
+        // 每条查询独占一个连接：Connection 不是 Sync，必须 move 进各自线程
+        let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13] =
+            <[rusqlite::Connection; 14]>::try_from(conns).expect("连接数固定为 14");
+
+        let (summary, trend, model_trend, provider_trend, models, projects, providers, tools, agents, errors, latency, activity, activity_daily, monthly_trend) =
+            std::thread::scope(|s| -> Result<_, AppError> {
+                let summary = s.spawn(move || queries::get_summary(&c0, range, p));
+                let trend = s.spawn(move || queries::get_trend(&c1, range, p));
+                let model_trend = s.spawn(move || queries::get_trend_by_model(&c2, range, p));
+                let provider_trend = s.spawn(move || queries::get_trend_by_provider(&c3, range, p));
+                let models = s.spawn(move || queries::get_model_stats(&c4, range, p));
+                let projects = s.spawn(move || queries::get_project_stats(&c5, range, p));
+                let providers = s.spawn(move || queries::get_provider_stats(&c6, range, p, &names));
+                let tools = s.spawn(move || queries::get_tool_stats(&c7, range));
+                let agents = s.spawn(move || queries::get_agent_stats(&c8, range));
+                let errors = s.spawn(move || queries::get_error_stats(&c9, range));
+                let latency = s.spawn(move || queries::get_latency_stats(&c10, range));
+                let activity = s.spawn(move || queries::get_activity_heatmap(&c11, range));
+                let activity_daily = s.spawn(move || queries::get_activity_daily(&c12, range));
+                let monthly_trend = s.spawn(move || queries::get_monthly_trend(&c13, range, p));
+
+                Ok((
+                    join_query("summary", summary.join())?,
+                    join_query("trend", trend.join())?,
+                    join_query("model_trend", model_trend.join())?,
+                    join_query("provider_trend", provider_trend.join())?,
+                    join_query("models", models.join())?,
+                    join_query("projects", projects.join())?,
+                    join_query("providers", providers.join())?,
+                    join_query("tools", tools.join())?,
+                    join_query("agents", agents.join())?,
+                    join_query("errors", errors.join())?,
+                    join_query("latency", latency.join())?,
+                    join_query("activity", activity.join())?,
+                    join_query("activity_daily", activity_daily.join())?,
+                    join_query("monthly_trend", monthly_trend.join())?,
+                ))
+            })?;
+
+        Ok(types::DashboardPayload {
+            summary,
+            trend,
+            model_trend,
+            provider_trend,
+            models,
+            projects,
+            providers,
+            tools,
+            agents,
+            errors,
+            latency,
+            activity,
+            activity_daily,
+            monthly_trend,
+        })
+    }
+}
+
+/// 等待并行查询线程：线程 panic 与查询错误都收敛成 AppError。
+fn join_query<T>(
+    name: &str,
+    r: std::thread::Result<rusqlite::Result<T>>,
+) -> Result<T, AppError> {
+    r.map_err(|_| AppError::Task(format!("{name} 查询线程异常退出")))
+        .and_then(|v| v.map_err(AppError::from))
 }
 
 /// 统一取连接:返回 (guard, conn),guard 必须与 conn 同生命周期
@@ -31,6 +129,18 @@ macro_rules! with_conn {
         let $guard = $state.db.lock().expect("db mutex poisoned");
         let $conn = $guard.as_ref().ok_or_else(|| $state.db_error())?;
     };
+}
+
+/// 一次刷新只走一个命令：14 个查询在同一个阻塞任务里跑完，避免 14 次 IPC 往返。
+#[tauri::command]
+async fn get_dashboard(
+    state: tauri::State<'_, AppState>,
+    range: types::Range,
+) -> Result<types::DashboardPayload, AppError> {
+    let inner = state.inner.clone();
+    tauri::async_runtime::spawn_blocking(move || inner.query_dashboard(&range))
+        .await
+        .map_err(|e| AppError::Task(e.to_string()))?
 }
 
 #[tauri::command]
@@ -64,9 +174,17 @@ fn get_trend_by_provider(
 }
 
 #[tauri::command]
-fn get_models(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::ModelStat>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_model_stats(conn, &range, &state.pricing_path).map_err(|e| e.to_string())
+async fn get_models(
+    state: tauri::State<'_, AppState>,
+    range: types::Range,
+) -> Result<Vec<types::ModelStat>, AppError> {
+    let inner = state.inner.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = inner.source.open()?;
+        queries::get_model_stats(&conn, &range, &inner.pricing_path).map_err(AppError::from)
+    })
+    .await
+    .map_err(|e| AppError::Task(e.to_string()))?
 }
 
 #[tauri::command]
@@ -96,21 +214,28 @@ fn get_projects(state: tauri::State<AppState>, range: types::Range) -> Result<Ve
 #[tauri::command]
 fn get_providers(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::ProviderStat>, String> {
     with_conn!(state, conn, _guard);
-    queries::get_provider_stats(conn, &range, &state.pricing_path).map_err(|e| e.to_string())
+    let names = state.source.provider_names();
+    queries::get_provider_stats(conn, &range, &state.pricing_path, &names).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_requests(
-    state: tauri::State<AppState>,
+async fn get_requests(
+    state: tauri::State<'_, AppState>,
     range: types::Range,
     page: i64,
     page_size: i64,
-) -> Result<types::RequestLogResponse, String> {
-    with_conn!(state, conn, _guard);
+) -> Result<types::RequestLogResponse, AppError> {
+    let inner = state.inner.clone();
     let page = page.max(1);
     // 分页单位是根会话:每页返回 N 个会话分组
     let page_size = page_size.clamp(5, 50);
-    queries::get_request_log(conn, &range, page, page_size, &state.pricing_path).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = inner.source.open()?;
+        queries::get_request_log(&conn, &range, page, page_size, &inner.pricing_path)
+            .map_err(AppError::from)
+    })
+    .await
+    .map_err(|e| AppError::Task(e.to_string()))?
 }
 
 #[tauri::command]
@@ -139,7 +264,7 @@ fn get_activity(state: tauri::State<AppState>, range: types::Range) -> Result<Ve
 
 #[tauri::command]
 fn get_pricing(state: tauri::State<AppState>) -> Result<types::PricingConfig, String> {
-    Ok(pricing::load(&state.pricing_path))
+    Ok((*pricing::load(&state.pricing_path)).clone())
 }
 
 #[tauri::command]
@@ -204,27 +329,38 @@ fn save_pricing(state: tauri::State<AppState>, config: types::PricingConfig) -> 
 /// 价格估算:用当前编辑中的价格(未保存也可)估算某模型在给定时间范围内的金额(美元)。
 /// 范围与界面时间选择一致;口径与正式计费完全相同(逐请求 + 峰谷 + 长上下文 + 币种折算)
 #[tauri::command]
-fn estimate_cost(
-    state: tauri::State<AppState>,
+async fn estimate_cost(
+    state: tauri::State<'_, AppState>,
     range: types::Range,
     model_id: String,
     entry: types::PriceEntry,
-) -> Result<f64, String> {
-    with_conn!(state, conn, _guard);
-    let mut cfg = pricing::load(&state.pricing_path);
-    cfg.models.insert(model_id.clone(), entry);
-    queries::cost_in_range(conn, &range, &cfg, &model_id).map_err(|e| e.to_string())
+) -> Result<f64, AppError> {
+    let inner = state.inner.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = inner.source.open()?;
+        let mut cfg = (*pricing::load(&inner.pricing_path)).clone();
+        cfg.models.insert(model_id.clone(), entry);
+        queries::cost_in_range(&conn, &range, &cfg, &model_id).map_err(AppError::from)
+    })
+    .await
+    .map_err(|e| AppError::Task(e.to_string()))?
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Meta {
     db_path: String,
+    source: &'static str,
+    supports_provider_editing: bool,
 }
 
 #[tauri::command]
 fn get_meta(state: tauri::State<AppState>) -> Meta {
-    Meta { db_path: state.db_path.display().to_string() }
+    Meta {
+        db_path: state.source.db_path().display().to_string(),
+        source: state.source.kind().label(),
+        supports_provider_editing: state.source.supports_provider_editing(),
+    }
 }
 
 // ---------- zcode 供应商配置管理(读写 ~/.zcode/v2/config.json) ----------
@@ -367,12 +503,14 @@ pub fn run() {
             let pricing_path = config_dir.join("pricing.json");
             pricing::ensure_migrated(&pricing_path);
 
-            let db_path = db::db_path();
-            let conn = db::open_db().ok();
+            let source = Box::new(sources::ZcodeSource::new());
+            let conn = source.open().ok();
             app.manage(AppState {
-                db: Mutex::new(conn),
-                db_path,
-                pricing_path,
+                inner: Arc::new(Inner {
+                    source,
+                    db: Mutex::new(conn),
+                    pricing_path,
+                }),
             });
 
             // 菜单栏托盘:主窗口关闭隐藏后的呼回入口与显式退出
@@ -404,6 +542,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_dashboard,
             get_summary,
             get_trend,
             get_trend_by_model,
@@ -447,3 +586,5 @@ pub fn run() {
             _ => {}
         });
 }
+
+

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentStat,
   DailyActivityPoint,
+  DashboardPayload,
   ErrorStats,
   HeatCell,
   LatencyStat,
@@ -28,6 +29,8 @@ export interface Range {
 
 // 数据查询走 Tauri invoke(Rust + rusqlite 只读直查),不再有 HTTP 后端
 export const api = {
+  // 一次刷新只打一个命令:14 组面板数据在同一个数据库快照里返回
+  dashboard: (range: Range) => invoke<DashboardPayload>("get_dashboard", { range }),
   summary: (range: Range) => invoke<Summary>("get_summary", { range }),
   trend: (range: Range) => invoke<TrendPoint[]>("get_trend", { range }),
   modelTrend: (range: Range) => invoke<ModelTrendPoint[]>("get_trend_by_model", { range }),

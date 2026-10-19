@@ -21,12 +21,12 @@ export function Panel({
   return (
     <section
       className={cn(
-        "rounded-xl border border-border bg-card text-card-foreground shadow-xs",
+        "min-w-0 rounded-panel bg-card text-card-foreground shadow-panel",
         className,
       )}
     >
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        <div className="text-[13px] font-semibold tracking-wide text-foreground">
+      <div className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-2">
+        <div className="min-w-0 text-[13px] font-semibold tracking-wide text-foreground">
           {title}
           {sub != null && (
             <span className="ml-2 font-normal text-muted-foreground">{sub}</span>
@@ -34,7 +34,7 @@ export function Panel({
         </div>
         {actions}
       </div>
-      <div className="px-2 pb-3">{children}</div>
+      <div className="px-3 pb-3">{children}</div>
     </section>
   );
 }

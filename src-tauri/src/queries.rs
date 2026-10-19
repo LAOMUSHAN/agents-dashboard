@@ -1,5 +1,4 @@
 use crate::pricing;
-use crate::providers;
 use crate::types::*;
 use rusqlite::{params_from_iter, Connection};
 use std::collections::{BTreeMap, HashMap};
@@ -127,15 +126,19 @@ fn cost_rows(
     range: &Range,
     cfg: &PricingConfig,
     key_expr: &str,
+    join_session: bool,
 ) -> rusqlite::Result<CostAgg> {
     let (where_sql, params) = build_where(range);
+    // 只有按项目目录分组时才需要 join session；其余 key 全在 model_usage 里，
+    // 省掉 7 万行的两次索引查找。
+    let from_clause = if join_session { FROM_CLAUSE } else { "FROM model_usage mu" };
     let rows = query_rows(
         conn,
         &format!(
             "SELECT {key_expr} AS k, mu.model_id, mu.started_at,
                     mu.input_tokens, mu.output_tokens,
                     mu.cache_read_input_tokens, mu.cache_creation_input_tokens
-             {FROM_CLAUSE} {where_sql}"
+             {from_clause} {where_sql}"
         ),
         &params,
         |r| {
@@ -156,8 +159,13 @@ fn cost_rows(
     let mut savings = 0.0;
     let mut savings_usd_priced = 0.0;
     let mut savings_cny_priced_usd = 0.0;
+    // 同一分钟内的请求共用一次时区换算：7 万行通常只落在几百个分钟上
+    let mut minute_cache: HashMap<i64, i64> = HashMap::new();
     for (k, model, ts, i, o, cr, cw) in rows {
-        let row = cfg.row_cost(&model, ts, i, o, cr, cw);
+        let minute = *minute_cache
+            .entry(ts / 60_000)
+            .or_insert_with(|| pricing::local_minute(ts));
+        let row = cfg.row_cost_at_minute(&model, minute, i, o, cr, cw);
         if !row.priced {
             unpriced.insert(model);
         }
@@ -246,7 +254,7 @@ pub fn get_summary(conn: &Connection, range: &Range, pricing_path: &std::path::P
 
     // 逐请求计价(含峰谷/长上下文),再按模型聚合
     let cfg = pricing::load(pricing_path);
-    let agg = cost_rows(conn, range, &cfg, "mu.model_id")?;
+    let agg = cost_rows(conn, range, &cfg, "mu.model_id", false)?;
     // 按币种分账:两个数字各自是真实支出,不是同一个总额的两种换算
     let (cost, cost_usd, cost_cny) = agg.split_total(cfg.usd_cny_rate);
     let unpriced_models: Vec<String> = agg.unpriced.iter().cloned().collect();
@@ -390,7 +398,7 @@ pub fn get_trend(conn: &Connection, range: &Range, pricing_path: &std::path::Pat
 
     // 逐请求计价(含峰谷/长上下文),再按时间桶聚合
     let cfg = pricing::load(pricing_path);
-    let cost_by_bucket = cost_rows(conn, range, &cfg, buckets.bucket_expr)?.cost;
+    let cost_by_bucket = cost_rows(conn, range, &cfg, buckets.bucket_expr, false)?.cost;
     let mut by_bucket: BTreeMap<String, TrendPoint> = BTreeMap::new();
     // 桶内累计 Σoutput/Σduration 与解码配对的 Σoutput/Σdecode,用于算两种加权速度
     let mut speed: BTreeMap<String, (i64, i64, i64, i64)> = BTreeMap::new();
@@ -465,6 +473,7 @@ pub fn get_trend_by_model(
         range,
         &cfg,
         &format!("({}) || char(31) || mu.model_id", buckets.bucket_expr),
+        false,
     )?;
     let mut by_bucket: BTreeMap<String, BTreeMap<String, TokenCost>> = BTreeMap::new();
     for r in &rows {
@@ -567,6 +576,7 @@ pub fn get_trend_by_provider(
         range,
         &cfg,
         &format!("({}) || char(31) || mu.provider_id", buckets.bucket_expr),
+        false,
     )?;
     let mut by_bucket: BTreeMap<String, BTreeMap<String, TokenCost>> = BTreeMap::new();
     // 桶 × 供应商 累计 Σoutput/Σduration 与解码配对 Σ,用于算两种加权速度
@@ -672,7 +682,7 @@ pub fn get_model_stats(conn: &Connection, range: &Range, pricing_path: &std::pat
 
     // 逐请求计价(含峰谷/长上下文),再按模型聚合
     let cfg = pricing::load(pricing_path);
-    let agg = cost_rows(conn, range, &cfg, "mu.model_id")?;
+    let agg = cost_rows(conn, range, &cfg, "mu.model_id", false)?;
     let cost_by_model = agg.cost;
     let unpriced_set = agg.unpriced;
 
@@ -832,7 +842,7 @@ pub fn get_project_stats(conn: &Connection, range: &Range, pricing_path: &std::p
     // 逐请求计价后按项目目录聚合(键与 PROJECT_DIR 一致,子代理行归到父会话目录);
     // 分币种各自留存,目录下混用两种定价时费用列要并排展示
     let cfg = pricing::load(pricing_path);
-    let agg = cost_rows(conn, range, &cfg, PROJECT_DIR)?;
+    let agg = cost_rows(conn, range, &cfg, PROJECT_DIR, true)?;
     let rate = cfg.usd_cny_rate;
 
     // 错误数不过滤状态单独统计(与错误分析面板口径一致)
@@ -886,7 +896,12 @@ pub fn get_project_stats(conn: &Connection, range: &Range, pricing_path: &std::p
 }
 
 /// 按供应商统计:provider_id 到名称的映射读自 zcode 配置文件
-pub fn get_provider_stats(conn: &Connection, range: &Range, pricing_path: &std::path::Path) -> rusqlite::Result<Vec<ProviderStat>> {
+pub fn get_provider_stats(
+    conn: &Connection,
+    range: &Range,
+    pricing_path: &std::path::Path,
+    names: &HashMap<String, String>,
+) -> rusqlite::Result<Vec<ProviderStat>> {
     let (where_sql, params) = build_where(range);
     struct Agg {
         requests: i64,
@@ -987,7 +1002,7 @@ pub fn get_provider_stats(conn: &Connection, range: &Range, pricing_path: &std::
     // 逐请求计价后按「供应商 × 模型」聚合(供应商总额 = 其下模型之和);
     // 同时留一份按供应商的人民币金额,供应商可能同时挂两种币种定价的模型
     let cfg = pricing::load(pricing_path);
-    let agg = cost_rows(conn, range, &cfg, "mu.provider_id || char(31) || mu.model_id")?;
+    let agg = cost_rows(conn, range, &cfg, "mu.provider_id || char(31) || mu.model_id", false)?;
     let cost_by_pm = &agg.cost;
     let rate = cfg.usd_cny_rate;
     let mut cost_by_provider: HashMap<String, f64> = HashMap::new();
@@ -1046,7 +1061,6 @@ pub fn get_provider_stats(conn: &Connection, range: &Range, pricing_path: &std::
     )?;
     let errors_by_provider: HashMap<String, i64> = err_rows.into_iter().collect();
 
-    let names = providers::load_provider_names();
     let mut result: Vec<ProviderStat> = rows
         .into_iter()
         .map(|(provider_id, a, (decode_duration_ms, decode_output_tokens))| {
@@ -1555,6 +1569,7 @@ pub fn get_monthly_trend(conn: &Connection, range: &Range, pricing_path: &std::p
         range,
         &cfg,
         "strftime('%Y-%m', mu.started_at/1000, 'unixepoch', 'localtime')",
+        false,
     )?;
     let mut by_month: BTreeMap<String, MonthPoint> = BTreeMap::new();
     let mut speed: BTreeMap<String, (i64, i64, i64, i64)> = BTreeMap::new();
@@ -2020,3 +2035,4 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 }
+

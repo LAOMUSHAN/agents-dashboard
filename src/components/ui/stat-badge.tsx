@@ -4,10 +4,10 @@ import { cn } from "@/lib/utils";
 export type BadgeTone = "ok" | "err" | "warn" | "info" | "muted";
 
 const TONES: Record<BadgeTone, string> = {
-  ok: "bg-emerald-500/12 text-emerald-600 dark:text-emerald-400 border-emerald-500/25",
-  err: "bg-rose-500/12 text-rose-600 dark:text-rose-400 border-rose-500/25",
-  warn: "bg-amber-500/14 text-amber-600 dark:text-amber-400 border-amber-500/25",
-  info: "bg-sky-500/12 text-sky-600 dark:text-sky-400 border-sky-500/25",
+  ok: "bg-success/12 text-success border-success/25",
+  err: "bg-danger/12 text-danger border-danger/25",
+  warn: "bg-warn/14 text-warn border-warn/25",
+  info: "bg-clay-soft text-clay border-clay/25",
   muted: "bg-muted text-muted-foreground border-transparent",
 };
 

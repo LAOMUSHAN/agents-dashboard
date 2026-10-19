@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { Lightbulb, RefreshCw as SwapIcon } from "lucide-react";
+import { RefreshCw, Sparkles } from "lucide-react";
 import type { ModelStat, ProviderStat, Summary } from "../../shared/types";
 import { fmtAmount, fmtCostSplit, fmtNumber, fmtPercent, fmtSpeed, fmtTokens } from "../format";
 import { StatBadge } from "./ui/stat-badge";
+import { cn } from "@/lib/utils";
 
 type Insight = { text: string; tone?: "warn" | "info" };
 
@@ -73,45 +74,67 @@ export function InsightCard({
 
   const [idx, setIdx] = useState(0);
   if (!summary || insights.length === 0) return null;
-  const cur = insights[idx % insights.length];
+  const active = idx % insights.length;
+  const cur = insights[active];
 
   return (
-    <section className="rounded-xl border border-border bg-card text-card-foreground shadow-xs">
-      <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
-        <div className="flex min-w-0 flex-1 items-start gap-2.5">
-          <Lightbulb size={16} className="mt-0.5 shrink-0 text-amber-500" />
-          <div className="min-w-0">
-            <div className="text-[13px] leading-relaxed">
-              {cur.text}
-              {cur.tone === "warn" && <StatBadge tone="warn" className="ml-2">留意</StatBadge>}
-            </div>
-            <div className="mt-0.5 text-[11px] text-muted-foreground">
-              洞察 {(idx % insights.length) + 1}/{insights.length}
-            </div>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          {summary.cacheSavings > 0 && (
-            <div className="text-right">
-              <div className="text-[11px] font-medium text-muted-foreground">缓存节省</div>
-              <div className="whitespace-nowrap text-sm font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                ≈ {fmtAmount(summary.cacheSavingsCny, "cny")} · {fmtAmount(summary.cacheSavingsUsd, "usd")}
-              </div>
-              <div className="text-[10px] text-muted-foreground">
-                {summary.unpricedModels.length > 0
-                  ? `${summary.unpricedModels.length} 个模型未计价未计入`
-                  : "按缓存读价差估算"}
-              </div>
-            </div>
+    <section className="flex flex-col gap-3 rounded-panel bg-card px-4 py-3 shadow-panel sm:flex-row sm:items-center">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-clay-soft text-clay">
+        <Sparkles size={15} />
+      </span>
+
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] leading-relaxed">
+          {cur.text}
+          {cur.tone === "warn" && (
+            <StatBadge tone="warn" className="ml-2">
+              留意
+            </StatBadge>
           )}
-          <button
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            onClick={() => setIdx((i) => i + 1)}
-            title="换一条洞察"
-          >
-            <SwapIcon size={14} />
-          </button>
         </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <span className="tabular-nums">{fmtNumber(summary.requests)} 次请求</span>
+          <span className="size-0.5 rounded-full bg-border" aria-hidden />
+          <span className="tabular-nums">{fmtNumber(summary.sessions)} 个会话</span>
+          {summary.cacheSavings > 0 && (
+            <>
+              <span className="size-0.5 rounded-full bg-border" aria-hidden />
+              <span>
+                缓存节省{" "}
+                <span className="font-medium text-success tabular-nums">
+                  ≈ {fmtAmount(summary.cacheSavingsCny, "cny")} · {fmtAmount(summary.cacheSavingsUsd, "usd")}
+                </span>
+              </span>
+            </>
+          )}
+          {summary.unpricedModels.length > 0 && (
+            <>
+              <span className="size-0.5 rounded-full bg-border" aria-hidden />
+              <span className="text-warn">{summary.unpricedModels.length} 个模型未计价</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-3">
+        <div className="flex items-center gap-1" aria-hidden>
+          {insights.map((_, i) => (
+            <span
+              key={i}
+              className={cn(
+                "size-1.5 rounded-full transition-colors",
+                i === active ? "bg-clay" : "bg-border",
+              )}
+            />
+          ))}
+        </div>
+        <button
+          className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          onClick={() => setIdx((i) => i + 1)}
+          title="换一条洞察"
+        >
+          <RefreshCw size={13} />
+        </button>
       </div>
     </section>
   );

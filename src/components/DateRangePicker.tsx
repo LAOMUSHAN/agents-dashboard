@@ -306,7 +306,6 @@ export function DateRangePicker(props: ReturnType<typeof useRange>) {
       onChange={setPreset}
       icon={CalendarRange}
       title="时间范围"
-      dropUp
       extra={({ close }) =>
         preset === "custom" ? (
           <RangeCalendar

@@ -3,6 +3,7 @@ import type { ModelStat, ProjectStat, ProviderStat } from "../../shared/types";
 import { cn } from "@/lib/utils";
 import { fmtPercent, fmtTokens } from "../format";
 import { Panel } from "./ui/panel";
+import { Segmented } from "./ui/segmented";
 
 type Dim = "project" | "model" | "provider";
 
@@ -84,24 +85,7 @@ export function WasteRankPanel({
     <Panel
       title="浪费指数排行"
       sub="低缓存命中 × 高输出占比 · TOP 10"
-      actions={
-        <div className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5">
-          {DIMS.map((d) => (
-            <button
-              key={d.value}
-              className={cn(
-                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                dim === d.value
-                  ? "bg-background text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setDim(d.value)}
-            >
-              {d.label}
-            </button>
-          ))}
-        </div>
-      }
+      actions={<Segmented value={dim} options={DIMS} onChange={setDim} />}
     >
       <div className="overflow-x-auto">
         <table className="w-full border-separate border-spacing-0">
@@ -128,7 +112,7 @@ export function WasteRankPanel({
                       <div
                         className={cn(
                           "h-full rounded-full",
-                          r.index >= 40 ? "bg-rose-500" : r.index >= 20 ? "bg-amber-500" : "bg-emerald-500",
+                          r.index >= 40 ? "bg-danger" : r.index >= 20 ? "bg-warn" : "bg-success",
                         )}
                         style={{ width: `${max ? (r.index / max) * 100 : 0}%` }}
                       />
@@ -148,7 +132,7 @@ export function WasteRankPanel({
                   <span
                     className={
                       suggest(r).tone === "warn"
-                        ? "text-amber-600 dark:text-amber-400"
+                        ? "text-warn"
                         : "text-muted-foreground"
                     }
                   >
@@ -170,3 +154,4 @@ export function WasteRankPanel({
     </Panel>
   );
 }
+

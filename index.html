@@ -5,11 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agents Dashboard</title>
     <style>
+      /* 首屏底色与 cds-tokens.css 的 surface-1 保持一致，避免主题闪色 */
       html {
-        background: #0f1117;
+        background: #fcfcfb;
       }
-      html[data-theme="light"] {
-        background: #f4f6fa;
+      html.dark {
+        background: #151515;
       }
     </style>
     <script>
@@ -21,6 +22,7 @@
             m === "dark" ||
             (m === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
           document.documentElement.dataset.theme = dark ? "dark" : "light";
+          document.documentElement.classList.toggle("dark", dark);
         } catch (e) {}
       })();
     </script>

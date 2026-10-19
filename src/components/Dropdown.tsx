@@ -89,7 +89,7 @@ export function Dropdown<T extends string | number>({
     <div className="relative" ref={rootRef}>
       <button
         type="button"
-        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground shadow-xs transition-colors hover:bg-muted"
+        className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         title={title}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -98,13 +98,13 @@ export function Dropdown<T extends string | number>({
       >
         {LeadIcon && <LeadIcon size={13} />}
         <span>{selected?.label}</span>
-        <ChevronDown size={13} className="text-muted-foreground transition-transform" style={{ transform: open ? "rotate(180deg)" : undefined }} />
+        <ChevronDown size={13} className="opacity-70 transition-transform" style={{ transform: open ? "rotate(180deg)" : undefined }} />
       </button>
       {open && (
         <div
           className={
-            "absolute right-0 z-50 min-w-36 rounded-lg border border-border bg-popover p-1 shadow-lg " +
-            (dropUp ? "bottom-full mb-1" : "mt-1")
+            "cds-pop absolute right-0 z-50 min-w-36 rounded-panel bg-popover p-1 shadow-popover " +
+            (dropUp ? "bottom-full mb-1 origin-bottom" : "mt-1 origin-top")
           }
         >
           <div role="listbox">
@@ -115,9 +115,9 @@ export function Dropdown<T extends string | number>({
                 role="option"
                 aria-selected={o.value === value}
                 className={cn(
-                  "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors",
-                  i === highlight && "bg-muted",
-                  o.value === value && "font-medium",
+                  "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12px] text-foreground transition-colors",
+                  i === highlight && "bg-accent",
+                  o.value === value && "font-medium text-clay",
                 )}
                 onPointerEnter={() => setHighlight(i)}
                 onClick={() => {
@@ -127,7 +127,7 @@ export function Dropdown<T extends string | number>({
               >
                 {o.icon && <o.icon size={13} />}
                 {o.label}
-                {o.value === value && <Check size={13} className="ml-auto text-foreground" />}
+                {o.value === value && <Check size={13} className="ml-auto text-clay" />}
               </button>
             ))}
           </div>

@@ -26,14 +26,14 @@ export function ToolStatsPanel({ stats }: { stats: ToolStat[] }) {
           </thead>
           <tbody>
             {stats.map((t) => (
-              <tr key={t.toolName} className="border-b border-border/60 transition-colors last:border-0 hover:bg-muted/50">
+              <tr key={t.toolName} className="border-b border-border/60 transition-colors last:border-0 hover:bg-accent/50">
                 <td className="relative px-2 py-1.5">
                   <div
                     aria-hidden
-                    className="absolute inset-y-1 left-2 rounded-sm bg-sky-500/12"
+                    className="absolute inset-y-1 left-2 rounded-sm bg-clay-soft"
                     style={{ width: `${maxCalls ? (t.calls / maxCalls) * 92 : 0}%` }}
                   />
-                  <span className="relative font-mono text-xs">{t.toolName}</span>
+                  <span className="relative font-mono text-[11px]">{t.toolName}</span>
                 </td>
                 <td className={TD_NUM}>{fmtNumber(t.calls)}</td>
                 <td className={TD_NUM + " text-muted-foreground"}>{t.cancelled || "-"}</td>
@@ -58,3 +58,4 @@ export function ToolStatsPanel({ stats }: { stats: ToolStat[] }) {
     </Panel>
   );
 }
+

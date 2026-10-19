@@ -1,8 +1,11 @@
 use crate::types::{PeakPricing, PriceEntry, PricingConfig, PricingMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::SystemTime;
 
 /// 请求发生时刻在本机时区的当日分钟数(0..1440)
-fn local_minute(started_at_ms: i64) -> i64 {
+pub fn local_minute(started_at_ms: i64) -> i64 {
     use chrono::{Local, TimeZone, Timelike};
     let dt = Local
         .timestamp_millis_opt(started_at_ms)
@@ -11,10 +14,8 @@ fn local_minute(started_at_ms: i64) -> i64 {
     dt.hour() as i64 * 60 + dt.minute() as i64
 }
 
-/// 该请求是否落在峰时段:windows 是 kind 指定的那一类时段,另一类即当日补集。
-/// kind 取值 "peak" | "offPeak"(容忍 off_peak / off-peak 等写法)
-fn is_peak(peak: &PeakPricing, started_at_ms: i64) -> bool {
-    let min = local_minute(started_at_ms);
+/// 该分钟数是否落在峰时段:windows 是 kind 指定的那一类时段,另一类即当日补集。
+fn is_peak_minute(peak: &PeakPricing, min: i64) -> bool {
     let listed = peak
         .windows
         .iter()
@@ -84,7 +85,7 @@ pub fn ensure_migrated(path: &Path) {
 /// - 新格式 = { displayCurrency, usdCnyRate, models: { modelId: 价格 } }
 /// 注意:必须按是否存在顶层 models 键区分——旧格式也能被 serde "成功" 解析成
 /// PricingConfig(未知键被忽略、models 取默认空表),那样会把价格静默读空
-pub fn load(path: &Path) -> PricingConfig {
+fn load_uncached(path: &Path) -> PricingConfig {
     if let Some(text) = std::fs::read_to_string(path).ok() {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
             if value.get("models").is_some() {
@@ -104,6 +105,43 @@ pub fn load(path: &Path) -> PricingConfig {
     let d = default_config();
     let _ = save(path, &d);
     d
+}
+
+/// 按 (mtime, 文件长度) 缓存的配置读取：一次刷新里 9 个查询共用同一份配置，
+/// 只有文件真的变了才重新解析。
+struct CacheEntry {
+    stamp: (SystemTime, u64),
+    cfg: Arc<PricingConfig>,
+}
+
+fn cache() -> &'static Mutex<HashMap<PathBuf, CacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn file_stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+pub fn load(path: &Path) -> Arc<PricingConfig> {
+    let stamp = file_stamp(path);
+    if let Some(stamp) = stamp {
+        if let Ok(guard) = cache().lock() {
+            if let Some(hit) = guard.get(path) {
+                if hit.stamp == stamp {
+                    return hit.cfg.clone();
+                }
+            }
+        }
+    }
+    let cfg = Arc::new(load_uncached(path));
+    if let Some(stamp) = stamp {
+        if let Ok(mut guard) = cache().lock() {
+            guard.insert(path.to_path_buf(), CacheEntry { stamp, cfg: cfg.clone() });
+        }
+    }
+    cfg
 }
 
 /// 保存前留一份 .bak,避免写坏配置时丢价格
@@ -149,13 +187,12 @@ impl PricingConfig {
     }
 
     /// 命中该请求的单价档(谷时基准价 → 峰时段倍率 → 长上下文系数),单位统一为美元/百万 token。
-    /// 峰谷:价格表填的是谷时段价,峰时段按该模型的 peak.multiplier 上浮。
-    /// 未启用峰谷的模型直接跳过——连时区换算都不做
-    fn price_for(&self, entry: &PriceEntry, started_at_ms: i64, input_tokens: i64) -> (f64, f64, f64, f64) {
+    /// 峰谷判定直接吃分钟数——批量计价时按分钟缓存时区换算。
+    fn price_for_minute(&self, entry: &PriceEntry, minute: i64, input_tokens: i64) -> (f64, f64, f64, f64) {
         let k = self.currency_ratio(entry.currency.as_deref());
         let mut q = (entry.input * k, entry.output * k, entry.cache_read * k, entry.cache_write * k);
         if let Some(p) = &entry.peak {
-            if p.multiplier > 0.0 && p.multiplier.is_finite() && is_peak(p, started_at_ms) {
+            if p.multiplier > 0.0 && p.multiplier.is_finite() && is_peak_minute(p, minute) {
                 let m = p.multiplier;
                 q = (q.0 * m, q.1 * m, q.2 * m, q.3 * m);
             }
@@ -200,10 +237,30 @@ impl PricingConfig {
         cache_read_tokens: i64,
         cache_create_tokens: i64,
     ) -> RowCost {
+        self.row_cost_at_minute(
+            model_id,
+            local_minute(started_at_ms),
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_create_tokens,
+        )
+    }
+
+    /// 与 row_cost 相同,但峰谷判定直接吃分钟数；批量计价时调用方按分钟缓存换算结果。
+    pub fn row_cost_at_minute(
+        &self,
+        model_id: &str,
+        minute: i64,
+        input_tokens: i64,
+        output_tokens: i64,
+        cache_read_tokens: i64,
+        cache_create_tokens: i64,
+    ) -> RowCost {
         let Some(entry) = self.models.get(model_id) else {
             return RowCost { cost: 0.0, saving: 0.0, priced: false, is_cny: false };
         };
-        let (p_in, p_out, p_read, p_write) = self.price_for(entry, started_at_ms, input_tokens);
+        let (p_in, p_out, p_read, p_write) = self.price_for_minute(entry, minute, input_tokens);
         let miss = (input_tokens - cache_read_tokens).max(0) as f64;
         let read = cache_read_tokens.max(0) as f64;
         let cost = (miss * p_in

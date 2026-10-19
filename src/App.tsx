@@ -33,6 +33,7 @@ import { ProviderTable } from "./components/ProviderTable";
 import { ProviderTrendChart } from "./components/ProviderTrendChart";
 import { RequestLog } from "./components/RequestLog";
 import { SummaryCards } from "./components/SummaryCards";
+import { TitleBar } from "./components/TitleBar";
 import { ToolStatsPanel } from "./components/ToolStatsPanel";
 import { TrendChart } from "./components/TrendChart";
 import { WasteRankPanel } from "./components/WasteRankPanel";
@@ -40,6 +41,7 @@ import { YearCalendar } from "./components/YearCalendar";
 import { getThemeMode, setThemeMode, type ThemeMode } from "./theme";
 import {
   ChartNoAxesColumn,
+  ChevronDown,
   ClipboardList,
   Contrast,
   Moon,
@@ -121,6 +123,9 @@ export default function App() {
   const [themeMode, setThemeModeState] = useState<ThemeMode>(getThemeMode);
   const [tab, setTab] = useState<Tab>(getInitialTab);
   const [navCollapsed, setNavCollapsed] = useState<boolean>(getInitialNavCollapsed);
+  // 总览默认只展示结论层,其余分析面板按需展开
+  const [showMore, setShowMore] = useState(false);
+  const [loading, setLoading] = useState(false);
   const themeOpt = THEME_OPTIONS.find((o) => o.value === themeMode);
 
   const switchTab = (t: Tab) => {
@@ -175,197 +180,212 @@ export default function App() {
     setThemeModeState(mode);
   };
 
-  // 只有切换时间范围时才清空旧数据;定时刷新等触发的 reload 静默替换,避免闪烁
+  // 切范围时保留旧数据，避免 30 天查询期间整页空白；
+  // 刷新 tick 撞上进行中的查询直接跳过，避免请求在阻塞线程池里排队。
   const lastRangeRef = useRef(range);
+  const busyRef = useRef(false);
+  const reqSeq = useRef(0);
   useEffect(() => {
+    const rangeChanged = lastRangeRef.current !== range;
+    lastRangeRef.current = range;
+    if (!rangeChanged && busyRef.current) return;
+
     let alive = true;
-    if (lastRangeRef.current !== range) {
-      lastRangeRef.current = range;
-      setSummary(null);
-      setTrend([]);
-      setModelTrend([]);
-      setProviderTrend([]);
-      setModels([]);
-      setProjects([]);
-      setProviders([]);
-      setTools([]);
-      setAgents([]);
-      setErrors(null);
-      setLatency([]);
-      setActivity([]);
-      setActivityDaily([]);
-      setMonthlyTrend([]);
-    }
-    Promise.all([
-      api.summary(range),
-      api.trend(range),
-      api.modelTrend(range),
-      api.providerTrend(range),
-      api.models(range),
-      api.projects(range),
-      api.providers(range),
-      api.tools(range),
-      api.agents(range),
-      api.errors(range),
-      api.latency(range),
-      api.activity(range),
-      api.activityDaily(range),
-      api.monthlyTrend(range),
-    ]).then(([s, t, mt, pt, m, p, pv, tl, ag, e, lat, act, ad, mo]) => {
-      if (!alive) return;
-      setSummary(s);
-      setTrend(t);
-      setModelTrend(mt);
-      setProviderTrend(pt);
-      setModels(m);
-      setProjects(p);
-      setProviders(pv);
-      setTools(tl);
-      setAgents(ag);
-      setErrors(e);
-      setLatency(lat);
-      setActivity(act);
-      setActivityDaily(ad);
-      setMonthlyTrend(mo);
-    });
+    const seq = ++reqSeq.current;
+    const timer = window.setTimeout(
+      () => {
+        busyRef.current = true;
+        setLoading(true);
+        api
+          .dashboard(range)
+          .then((d) => {
+            if (!alive || seq !== reqSeq.current) return;
+            setSummary(d.summary);
+            setTrend(d.trend);
+            setModelTrend(d.modelTrend);
+            setProviderTrend(d.providerTrend);
+            setModels(d.models);
+            setProjects(d.projects);
+            setProviders(d.providers);
+            setTools(d.tools);
+            setAgents(d.agents);
+            setErrors(d.errors);
+            setLatency(d.latency);
+            setActivity(d.activity);
+            setActivityDaily(d.activityDaily);
+            setMonthlyTrend(d.monthlyTrend);
+          })
+          .catch((e) => {
+            if (alive && seq === reqSeq.current) console.error("加载仪表盘数据失败", e);
+          })
+          .finally(() => {
+            if (seq !== reqSeq.current) return;
+            busyRef.current = false;
+            if (alive) setLoading(false);
+          });
+      },
+      rangeChanged ? 120 : 0,
+    );
+
     return () => {
       alive = false;
+      window.clearTimeout(timer);
     };
   }, [range, reloadKey]);
 
-  const navItem = (t: (typeof TABS)[number]) => (
-    <button
-      key={t.value}
-      role="tab"
-      aria-selected={tab === t.value}
-      title={navCollapsed ? t.label : undefined}
-      className={
-        "group relative flex w-full items-center rounded-lg text-[13px] font-medium transition-colors " +
-        (navCollapsed ? "h-9 justify-center px-0 " : "gap-2.5 px-3 py-2 ") +
-        (tab === t.value
-          ? "bg-primary/10 text-primary"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground")
-      }
-      onClick={() => switchTab(t.value)}
-    >
-      {tab === t.value && (
-        <span className="absolute left-0 h-4 w-0.5 -translate-x-2.5 rounded-full bg-primary" aria-hidden />
-      )}
-      <t.icon size={16} className="shrink-0" />
-      {!navCollapsed && <span className="truncate">{t.label}</span>}
-      {!navCollapsed && t.value === "health" && errors && errors.error > 0 && (
-        <span className="ml-auto inline-flex items-center rounded-full bg-rose-500/15 px-1.5 py-px text-[10px] font-semibold text-rose-600 dark:text-rose-400">
-          {fmtNumber(errors.error)}
-        </span>
-      )}
-    </button>
-  );
+  const navItem = (t: (typeof TABS)[number]) => {
+    const active = tab === t.value;
+    return (
+      <button
+        key={t.value}
+        role="tab"
+        aria-selected={active}
+        title={navCollapsed ? t.label : undefined}
+        className={cn(
+          "group relative flex w-full items-center rounded-lg text-[13px] font-medium transition-colors duration-150",
+          navCollapsed ? "h-9 justify-center px-0" : "gap-2.5 px-3 py-2",
+          active
+            ? "bg-accent text-foreground"
+            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+        )}
+        onClick={() => switchTab(t.value)}
+      >
+        {active && (
+          <span
+            className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-clay"
+            aria-hidden
+          />
+        )}
+        <t.icon size={16} className={cn("shrink-0", active && "text-clay")} />
+        {!navCollapsed && <span className="truncate">{t.label}</span>}
+        {!navCollapsed && t.value === "health" && errors && errors.error > 0 && (
+          <span className="ml-auto inline-flex items-center rounded-full bg-danger/12 px-1.5 py-px text-[10px] font-semibold tabular-nums text-danger">
+            {fmtNumber(errors.error)}
+          </span>
+        )}
+      </button>
+    );
+  };
+
+  const currentTab = TABS.find((t) => t.value === tab) ?? TABS[0];
+  const TAB_HINTS: Record<Tab, string> = {
+    overview: "区间用量、费用与健康度",
+    breakdown: "按供应商 / 模型 / 项目拆解",
+    health: "错误、延迟与工具调用",
+    log: "按会话分组的请求明细",
+    settings: "供应商与模型单价",
+  };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <aside
-        className={
-          "fixed inset-y-0 left-0 z-20 flex flex-col border-r border-border bg-card/60 backdrop-blur transition-[width] duration-200 " +
-          (navCollapsed ? "w-16" : "w-[180px]")
-        }
-      >
-        <div className={"flex h-[68px] items-center border-b border-border " + (navCollapsed ? "justify-center px-2" : "px-4")}>
-          {navCollapsed ? (
-            <span className="text-base font-bold tracking-tight text-primary" title="Agents Dashboard">
-              Z
-            </span>
-          ) : (
-            <div className="min-w-0">
-              <h1 className="flex items-baseline gap-1.5 text-sm font-semibold tracking-tight">
-                Agents Dashboard
-                <span className="rounded border border-border bg-muted/40 px-1 font-mono text-[9px] font-medium text-muted-foreground" title="应用版本">
-                  v{__APP_VERSION__}
-                </span>
-              </h1>
-              <div className="mt-0.5 truncate text-[11px] text-muted-foreground">本地数据实时统计</div>
-            </div>
+    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      <TitleBar title={currentTab.label} hint={TAB_HINTS[tab]} busy={loading}>
+        <DateRangePicker {...rangeState} />
+        <Dropdown
+          value={refreshSec}
+          options={REFRESH_DROPDOWN_OPTIONS}
+          onChange={setRefreshSec}
+          icon={RefreshCw}
+          title="定时刷新"
+        />
+        <Dropdown
+          value={themeMode}
+          options={THEME_OPTIONS}
+          onChange={setTheme}
+          icon={themeOpt?.icon}
+          title="主题(自动跟随系统)"
+        />
+      </TitleBar>
+
+      <div className="flex min-h-0 flex-1">
+        <aside
+          className={cn(
+            "flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-200",
+            navCollapsed ? "w-16" : "w-[208px]",
           )}
-        </div>
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-3" role="tablist">
-          {TABS.map(navItem)}
-        </nav>
-        <div className="border-t border-border p-3">
-          {!navCollapsed && (
-            <div className="flex flex-col gap-2">
-              <DateRangePicker {...rangeState} />
-              <Dropdown
-                dropUp
-                value={refreshSec}
-                options={REFRESH_DROPDOWN_OPTIONS}
-                onChange={setRefreshSec}
-                icon={RefreshCw}
-                title="定时刷新"
-              />
-              <Dropdown
-                dropUp
-                value={themeMode}
-                options={THEME_OPTIONS}
-                onChange={setTheme}
-                icon={themeOpt?.icon}
-                title="主题(自动跟随系统)"
-              />
-            </div>
-          )}
-          <button
+        >
+          <div
             className={cn(
-              "flex h-8 w-full items-center justify-center gap-2 rounded-lg text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-              !navCollapsed && "mt-2",
+              "flex h-10 items-center border-b border-sidebar-border",
+              navCollapsed ? "justify-center px-2" : "justify-between px-4",
             )}
-            onClick={toggleNav}
-            title={navCollapsed ? "展开侧栏" : "收起"}
           >
-            {navCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-            {!navCollapsed && <span>收起</span>}
-          </button>
-        </div>
-      </aside>
+            {!navCollapsed && (
+              <span className="text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
+                导航
+              </span>
+            )}
+            {!navCollapsed && (
+              <span className="font-mono text-[9px] text-muted-foreground/70">v{__APP_VERSION__}</span>
+            )}
+          </div>
+          <nav className="app-nav cds-scroll-fade flex-1 space-y-1 overflow-y-auto px-3 py-3" role="tablist">
+            {TABS.map(navItem)}
+          </nav>
+          <div className="border-t border-sidebar-border p-3">
+            <button
+              className="flex h-8 w-full items-center justify-center gap-2 rounded-lg text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              onClick={toggleNav}
+              title={navCollapsed ? "展开侧栏" : "收起"}
+            >
+              {navCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+              {!navCollapsed && <span>收起</span>}
+            </button>
+          </div>
+        </aside>
 
-      <div className={"transition-[padding] duration-200 " + (navCollapsed ? "pl-16" : "pl-[180px]")}>
-        <main className="mx-auto flex max-w-[1440px] flex-col gap-4 px-5 pb-16 pt-4">
-        {tab === "overview" && (
-          <>
-            <InsightCard summary={summary} models={models} providers={providers} />
-            <SummaryCards summary={summary} />
-            <TrendChart points={trend} monthly={monthlyTrend} />
-            <ModelTrendChart points={modelTrend} />
-            <ProviderTrendChart points={providerTrend} names={providerNames} />
-            <ContextComposition summary={summary} tools={tools} />
-            <ActivityHeatmap cells={activity} />
-            <YearCalendar points={activityDaily} />
-            <AgentStatsPanel stats={agents} />
-            <WasteRankPanel projects={projects} models={models} providers={providers} />
-          </>
-        )}
+        <main className="min-w-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-5 pb-16 pt-5">
+            {tab === "overview" && (
+              <>
+                <InsightCard summary={summary} models={models} providers={providers} />
+                <SummaryCards summary={summary} trend={trend} />
+                <TrendChart points={trend} monthly={monthlyTrend} />
+                <button
+                  className="mx-auto inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={() => setShowMore((v) => !v)}
+                >
+                  {showMore ? "收起更多分析" : "展开更多分析"}
+                  <ChevronDown size={13} className={cn("transition-transform", showMore && "rotate-180")} />
+                </button>
+                {showMore && (
+                  <div className="cds-pop flex flex-col gap-4">
+                    <ModelTrendChart points={modelTrend} />
+                    <ProviderTrendChart points={providerTrend} names={providerNames} />
+                    <ContextComposition summary={summary} tools={tools} />
+                    <ActivityHeatmap cells={activity} />
+                    <YearCalendar points={activityDaily} />
+                    <AgentStatsPanel stats={agents} />
+                    <WasteRankPanel projects={projects} models={models} providers={providers} />
+                  </div>
+                )}
+              </>
+            )}
 
-        {tab === "breakdown" && (
-          <ProviderTable stats={providers} models={models} projects={projects} />
-        )}
+            {tab === "breakdown" && <ProviderTable stats={providers} models={models} projects={projects} />}
 
-        {tab === "health" && (
-          <>
-            <div className="grid-2">
-              <ErrorPanel stats={errors} />
-              <LatencyPanel stats={latency} />
-            </div>
-            <ToolStatsPanel stats={tools} />
-          </>
-        )}
+            {tab === "health" && (
+              <>
+                <div className="grid-2">
+                  <ErrorPanel stats={errors} />
+                  <LatencyPanel stats={latency} />
+                </div>
+                <ToolStatsPanel stats={tools} />
+              </>
+            )}
 
-        {tab === "log" && <RequestLog range={range} reloadKey={reloadKey} />}
+            {tab === "log" && <RequestLog range={range} />}
 
-        {tab === "settings" && (
-          <>
-            <ProviderPanel />
-            <PricingPanel range={range} onSaved={() => setReloadKey((k) => k + 1)} />
-          </>
-        )}
+            {tab === "settings" && (
+              <>
+                <ProviderPanel />
+                <PricingPanel range={range} models={models} onSaved={() => setReloadKey((k) => k + 1)} />
+              </>
+            )}
+          </div>
         </main>
       </div>
     </div>
   );
 }
+
+

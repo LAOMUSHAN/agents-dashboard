@@ -13,6 +13,7 @@ import type { MonthPoint, TrendPoint } from "../../shared/types";
 import { fmtBucket, fmtCostRaw, fmtSpeed, fmtTokens } from "../format";
 import { useChartPalette } from "../hooks/useChartPalette";
 import { Panel } from "./ui/panel";
+import { Segmented } from "./ui/segmented";
 import { ChartTip } from "./ui/chart-tip";
 import { cn } from "@/lib/utils";
 
@@ -94,39 +95,15 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
       }
       actions={
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5">
-            {GRAIN_SEG.map((g) => (
-              <button
-                key={g.value}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                  grain === g.value
-                    ? "bg-background text-foreground shadow-xs"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-                onClick={() => setGrain(g.value)}
-                title={g.value === "month" ? "按月聚合" : "跨度 ≤24h 按小时,否则按天"}
-              >
-                {g.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5">
-            {SEG.map((s) => (
-              <button
-                key={s.value}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                  view === s.value
-                    ? "bg-background text-foreground shadow-xs"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-                onClick={() => setView(s.value)}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            value={grain}
+            options={GRAIN_SEG.map((g) => ({
+              ...g,
+              title: g.value === "month" ? "按月聚合" : "跨度 ≤24h 按小时,否则按天",
+            }))}
+            onChange={setGrain}
+          />
+          <Segmented value={view} options={SEG} onChange={setView} />
         </div>
       }
     >
@@ -134,18 +111,18 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
         <>
           <ResponsiveContainer width="100%" height={320} className="px-1 pb-2">
             <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke={palette.grid} strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke={palette.grid} strokeDasharray="2 8" strokeOpacity={0.55} vertical={false} />
               <XAxis
                 dataKey="label"
-                tick={{ fill: palette.tick, fontSize: 11 }}
+                tick={{ fill: palette.tick, fontSize: 10.5 }}
                 tickLine={false}
-                axisLine={{ stroke: palette.grid }}
+                axisLine={false}
                 minTickGap={24}
               />
               <YAxis
                 yAxisId="speed"
                 tickFormatter={(v) => fmtSpeed(v)}
-                tick={{ fill: palette.tick, fontSize: 11 }}
+                tick={{ fill: palette.tick, fontSize: 10.5 }}
                 tickLine={false}
                 axisLine={false}
                 width={64}
@@ -189,7 +166,7 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
                 </span>
                 {monthlyNote.mom != null && (
                   <span>
-                    环比 <span className={cn("font-medium tabular-nums", monthlyNote.mom >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400")}>
+                    环比 <span className={cn("font-medium tabular-nums", monthlyNote.mom >= 0 ? "text-success" : "text-danger")}>
                       {monthlyNote.mom >= 0 ? "+" : ""}{monthlyNote.mom.toFixed(1)}%
                     </span>
                   </span>
@@ -202,18 +179,18 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
         <>
           <ResponsiveContainer width="100%" height={320} className="px-1 pb-2">
             <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke={palette.grid} strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke={palette.grid} strokeDasharray="2 8" strokeOpacity={0.55} vertical={false} />
               <XAxis
                 dataKey="label"
-                tick={{ fill: palette.tick, fontSize: 11 }}
+                tick={{ fill: palette.tick, fontSize: 10.5 }}
                 tickLine={false}
-                axisLine={{ stroke: palette.grid }}
+                axisLine={false}
                 minTickGap={24}
               />
               <YAxis
                 yAxisId="tokens"
                 tickFormatter={(v) => fmtTokens(v)}
-                tick={{ fill: palette.tick, fontSize: 11 }}
+                tick={{ fill: palette.tick, fontSize: 10.5 }}
                 tickLine={false}
                 axisLine={false}
                 width={52}
@@ -260,6 +237,14 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
                   );
                 }}
               />
+              <defs>
+                {visibleSeries.map((s, i) => (
+                  <linearGradient key={s.key} id={`trend-fill-${i}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={palette.series[i]} stopOpacity={0.34} />
+                    <stop offset="100%" stopColor={palette.series[i]} stopOpacity={0.02} />
+                  </linearGradient>
+                ))}
+              </defs>
               {visibleSeries.map((s, i) => (
                   <Area
                     key={s.key}
@@ -269,10 +254,11 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
                     dataKey={s.key}
                     name={s.name}
                     stroke={palette.series[i]}
-                    strokeWidth={1.5}
-                    fill={palette.series[i]}
-                    fillOpacity={palette.areaOpacity}
+                    strokeWidth={1.8}
+                    fill={`url(#trend-fill-${i})`}
+                    fillOpacity={1}
                     dot={dotOf(palette.series[i], s.key, singleVal(s.key))}
+                    activeDot={{ r: 4, strokeWidth: 2, stroke: "var(--cds-surface-2)" }}
                     isAnimationActive={false}
                   />
                 ))}
@@ -282,9 +268,10 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
                 dataKey="cost"
                 name="费用"
                 stroke={palette.cost}
-                strokeWidth={1.5}
-                strokeDasharray="5 3"
+                strokeWidth={1.6}
+                strokeDasharray="4 4"
                 dot={dotOf(palette.cost, "cost", singleVal("cost"))}
+                activeDot={{ r: 3.5, strokeWidth: 2, stroke: "var(--cds-surface-2)" }}
                 isAnimationActive={false}
               />
             </ComposedChart>
@@ -313,7 +300,7 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
                 </span>
                 {monthlyNote.mom != null && (
                   <span>
-                    环比 <span className={cn("font-medium tabular-nums", monthlyNote.mom >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400")}>
+                    环比 <span className={cn("font-medium tabular-nums", monthlyNote.mom >= 0 ? "text-success" : "text-danger")}>
                       {monthlyNote.mom >= 0 ? "+" : ""}{monthlyNote.mom.toFixed(1)}%
                     </span>
                   </span>
@@ -326,3 +313,4 @@ export function TrendChart({ points, monthly }: { points: TrendPoint[]; monthly?
     </Panel>
   );
 }
+

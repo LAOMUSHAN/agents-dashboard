@@ -517,3 +517,24 @@ pub struct ZProviderConfig {
     pub path: String,
     pub providers: Vec<ZProviderEntry>,
 }
+
+/// 仪表盘一次性返回的全部数据：一次 IPC、一个数据库快照，
+/// 避免 14 个命令各查一遍导致同一屏里的数字来自不同时刻。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardPayload {
+    pub summary: Summary,
+    pub trend: Vec<TrendPoint>,
+    pub model_trend: Vec<ModelTrendPoint>,
+    pub provider_trend: Vec<ProviderTrendPoint>,
+    pub models: Vec<ModelStat>,
+    pub projects: Vec<ProjectStat>,
+    pub providers: Vec<ProviderStat>,
+    pub tools: Vec<ToolStat>,
+    pub agents: Vec<AgentStat>,
+    pub errors: ErrorStats,
+    pub latency: Vec<LatencyStat>,
+    pub activity: Vec<HeatCell>,
+    pub activity_daily: Vec<DailyActivityPoint>,
+    pub monthly_trend: Vec<MonthPoint>,
+}

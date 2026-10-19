@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import type { PeakWindow, PriceEntry, PricingConfig } from "../../shared/types";
+import type { ModelStat, PeakWindow, PriceEntry, PricingConfig } from "../../shared/types";
 import { api, type Range } from "../api";
 import { fmtAmount, fmtCostIn, isCnyCurrency, moneyRate, setUsdCnyRate } from "../format";
 import { Panel } from "./ui/panel";
@@ -219,7 +219,7 @@ function ToggleBtn({
       className={cn(
         "w-16 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
         active
-          ? "border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400"
+          ? "border-clay/40 bg-clay-soft text-clay"
           : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
       )}
       title={title}
@@ -237,7 +237,15 @@ function ToggleBtn({
  * 模型单价编辑面板:逐模型币种、峰谷加价(峰时段倍数)、长上下文加价,行尾显示价格估算。
  * 列表与估算范围都跟随侧栏的时间选择;点击行空白处展开该模型的设置区
  */
-export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => void }) {
+export function PricingPanel({
+  range,
+  models,
+  onSaved,
+}: {
+  range: Range;
+  models: ModelStat[];
+  onSaved: () => void;
+}) {
   const [rows, setRows] = useState<Row[]>([]);
   const [config, setConfig] = useState<PricingConfig | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -257,10 +265,13 @@ export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => 
   rowsRef.current = rows;
   configRef.current = config;
 
+  // 模型列表直接复用总览已加载的数据，避免打开设置页时再打一次同步查询
+  const modelKey = useMemo(() => models.map((m) => m.modelId).sort().join("|"), [models]);
   useEffect(() => {
     let alive = true;
-    Promise.all([api.pricing(), api.models(range)])
-      .then(([cfg, models]) => {
+    api
+      .pricing()
+      .then((cfg) => {
         if (!alive) return;
         setConfig(cfg);
         // 只列出该范围内使用过的模型;范围变化时保留已编辑但未保存的草稿
@@ -290,7 +301,7 @@ export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => 
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.from, range.to]);
+  }, [range.from, range.to, modelKey]);
 
   // 汇率框文本跟随已落盘的配置(改动提交后与配置一致,无未提交编辑时始终显示真值)
   useEffect(() => {
@@ -640,7 +651,7 @@ export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => 
                               + 时段
                             </button>
                             {r.peakWindows.some(isBadWindow) && (
-                              <span className="text-[11px] text-amber-600 dark:text-amber-400">结束时间需晚于开始时间</span>
+                              <span className="text-[11px] text-warn">结束时间需晚于开始时间</span>
                             )}
                           </div>
                           <div className={cn("flex flex-wrap items-center gap-3", !r.longEnabled && "opacity-50")}>
@@ -723,7 +734,7 @@ export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => 
           添加
         </button>
       </div>
-      {error && <p className="px-2 pt-2 text-xs text-rose-600 dark:text-rose-400">{error}</p>}
+      {error && <p className="px-2 pt-2 text-xs text-danger">{error}</p>}
       <div className="flex justify-end px-2 pt-3">
         <button
           className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
@@ -736,3 +747,4 @@ export function PricingPanel({ range, onSaved }: { range: Range; onSaved: () => 
     </Panel>
   );
 }
+

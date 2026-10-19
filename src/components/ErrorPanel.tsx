@@ -16,9 +16,9 @@ const ZERO: ErrorStats = {
 
 function Chip({ label, value, hint, danger }: { label: string; value: string; hint?: string; danger?: boolean }) {
   return (
-    <div className="flex-1 min-w-28 rounded-lg border border-border bg-muted/30 px-3 py-2">
+    <div className="min-w-28 flex-1 rounded-lg bg-accent/40 px-3 py-2">
       <div className="text-[11px] font-medium text-muted-foreground">{label}</div>
-      <div className={"mt-0.5 text-lg font-semibold tabular-nums " + (danger ? "text-rose-600 dark:text-rose-400" : "")}>
+      <div className={"mt-0.5 text-lg font-semibold tabular-nums " + (danger ? "text-danger" : "")}>
         {value}
         {hint && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{hint}</span>}
       </div>
@@ -49,7 +49,7 @@ export function ErrorPanel({ stats }: { stats: ErrorStats | null }) {
           </thead>
           <tbody>
             {s.groups.map((g, i) => (
-              <tr key={i} className="border-b border-border/60 transition-colors last:border-0 hover:bg-muted/50">
+              <tr key={i} className="border-b border-border/60 transition-colors last:border-0 hover:bg-accent/50">
                 <td className="px-2 py-1.5 font-mono text-xs">{g.errorType || "-"}</td>
                 <td className="px-2 py-1.5 font-mono text-xs">{g.errorCode || "-"}</td>
                 <td className="px-2 py-1.5 text-right text-[13px] tabular-nums">{fmtNumber(g.count)}</td>
@@ -74,3 +74,4 @@ export function ErrorPanel({ stats }: { stats: ErrorStats | null }) {
     </Panel>
   );
 }
+

@@ -13,6 +13,7 @@ import type { ProviderTrendPoint } from "../../shared/types";
 import { fmtBucket, fmtCostRaw, fmtShare, fmtSpeed, fmtTokens } from "../format";
 import { useChartPalette } from "../hooks/useChartPalette";
 import { Panel } from "./ui/panel";
+import { Segmented } from "./ui/segmented";
 import { ChartTip } from "./ui/chart-tip";
 import { cn } from "@/lib/utils";
 
@@ -114,24 +115,7 @@ export function ProviderTrendChart({
     <Panel
       title="供应商用量趋势"
       sub={hourly ? "按小时 · 堆叠" : "按天 · 堆叠"}
-      actions={
-        <div className="flex items-center gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5">
-          {SEG.map((s) => (
-            <button
-              key={s.value}
-              className={cn(
-                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                metric === s.value
-                  ? "bg-background text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-              onClick={() => setMetric(s.value)}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-      }
+      actions={<Segmented value={metric} options={SEG} onChange={setMetric} />}
     >
       {series.length === 0 ? (
         <div className="px-2 py-8 text-center text-[13px] text-muted-foreground">暂无数据</div>
@@ -139,17 +123,17 @@ export function ProviderTrendChart({
         <>
           <ResponsiveContainer width="100%" height={320} className="px-1 pb-2">
             <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke={palette.grid} strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke={palette.grid} strokeDasharray="2 8" strokeOpacity={0.55} vertical={false} />
               <XAxis
                 dataKey="label"
-                tick={{ fill: palette.tick, fontSize: 11 }}
+                tick={{ fill: palette.tick, fontSize: 10.5 }}
                 tickLine={false}
                 axisLine={{ stroke: palette.grid }}
                 minTickGap={24}
               />
               <YAxis
                 tickFormatter={(v) => fmt(v)}
-                tick={{ fill: palette.tick, fontSize: 11 }}
+                tick={{ fill: palette.tick, fontSize: 10.5 }}
                 tickLine={false}
                 axisLine={false}
                 width={metric === "speed" || metric === "decodeSpeed" ? 70 : 56}
@@ -201,7 +185,7 @@ export function ProviderTrendChart({
                     stroke={colorOf(palette, id, i)}
                     strokeWidth={1.5}
                     fill={colorOf(palette, id, i)}
-                    fillOpacity={palette.areaOpacity}
+                    fillOpacity={0.22}
                     dot={dotOf(colorOf(palette, id, i), id, singleVal(id))}
                     isAnimationActive={false}
                   />
@@ -233,3 +217,5 @@ export function ProviderTrendChart({
     </Panel>
   );
 }
+
+

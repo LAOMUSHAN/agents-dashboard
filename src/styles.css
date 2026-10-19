@@ -1,49 +1,26 @@
+/* 旧组件变量桥接：颜色全部来自 styles/cds-tokens.css 的 CDS 令牌。
+   这些别名只为未迁移的旧类服务，P2 迁移完成后随选择器一起删除。 */
 :root {
-  --bg: #0f1117;
-  --panel: #171a23;
-  --border: #262b38;
-  --text: #e6e9f0;
-  --muted: #8b93a7;
-  --accent: #60a5fa;
-  --warn: #fbbf24;
-  --ok: #4ade80;
-  --err: #f43f5e;
-  --accent-soft: rgba(96, 165, 250, 0.15);
-  --ok-bg: rgba(74, 222, 128, 0.12);
-  --err-bg: rgba(244, 63, 94, 0.12);
-  --warn-bg: rgba(251, 191, 36, 0.12);
-  --info-bg: rgba(96, 165, 250, 0.12);
-  --row-border: rgba(38, 43, 56, 0.5);
-  --hover: rgba(255, 255, 255, 0.02);
-  --tooltip-bg: #1d2230;
-  --popup-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  --mask: rgba(0, 0, 0, 0.55);
-  --on-accent: #0b1220;
-  color-scheme: dark;
-}
-
-:root[data-theme="light"] {
-  --bg: #f4f6fa;
-  --panel: #ffffff;
-  --border: #e3e7ef;
-  --text: #1c2230;
-  --muted: #67718a;
-  --accent: #2563eb;
-  --warn: #b45309;
-  --ok: #16a34a;
-  --err: #dc2626;
-  --accent-soft: rgba(37, 99, 235, 0.1);
-  --ok-bg: rgba(22, 163, 74, 0.1);
-  --err-bg: rgba(220, 38, 38, 0.08);
-  --warn-bg: rgba(180, 83, 9, 0.1);
-  --info-bg: rgba(37, 99, 235, 0.08);
-  --row-border: #eef1f6;
-  --hover: rgba(28, 34, 48, 0.03);
-  --tooltip-bg: #ffffff;
-  --popup-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
-  --mask: rgba(15, 23, 42, 0.45);
-  --on-accent: #ffffff;
-  color-scheme: light;
+  --bg: var(--cds-surface-1);
+  --panel: var(--cds-surface-2);
+  --border: var(--cds-border);
+  --text: var(--cds-text-primary);
+  --muted: var(--cds-text-muted);
+  --accent: var(--cds-clay);
+  --warn: var(--cds-fill-warn);
+  --ok: var(--cds-fill-success);
+  --err: var(--cds-fill-danger);
+  --accent-soft: var(--cds-clay-soft);
+  --ok-bg: color-mix(in srgb, var(--cds-fill-success) 12%, transparent);
+  --err-bg: color-mix(in srgb, var(--cds-fill-danger) 12%, transparent);
+  --warn-bg: color-mix(in srgb, var(--cds-fill-warn) 12%, transparent);
+  --info-bg: var(--cds-clay-soft);
+  --row-border: var(--cds-border);
+  --hover: var(--cds-alpha-1);
+  --tooltip-bg: var(--cds-surface-popover);
+  --popup-shadow: var(--cds-shadow-popover);
+  --mask: color-mix(in srgb, var(--cds-gray-900) 55%, transparent);
+  --on-accent: #1a1a19;
 }
 
 * {
@@ -54,9 +31,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
-    "Microsoft YaHei", sans-serif;
+  font-family: var(--cds-font-sans);
   font-size: 14px;
 }
 
@@ -1507,4 +1482,370 @@ td .badge {
 .pv-toggle {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* ---------- CDS motion utilities ---------- */
+@keyframes cds-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.cds-pop {
+  animation: cds-pop-in var(--cds-dur-fast) var(--cds-ease-overshoot);
+  will-change: transform, opacity;
+}
+
+/* 滚动渐隐:7 档非线性遮罩,组件通过 --cds-scroll-fade-* 控制高度 */
+.cds-scroll-fade {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #0000000d calc(var(--cds-scroll-fade-top) * 0.15),
+    #00000026 calc(var(--cds-scroll-fade-top) * 0.3),
+    #0000004d calc(var(--cds-scroll-fade-top) * 0.45),
+    #00000080 calc(var(--cds-scroll-fade-top) * 0.6),
+    #000000b3 calc(var(--cds-scroll-fade-top) * 0.75),
+    #000000d9 calc(var(--cds-scroll-fade-top) * 0.87),
+    #000 var(--cds-scroll-fade-top),
+    #000 calc(100% - var(--cds-scroll-fade-bottom)),
+    #000000d9 calc(100% - var(--cds-scroll-fade-bottom) * 0.87),
+    #000000b3 calc(100% - var(--cds-scroll-fade-bottom) * 0.75),
+    #00000080 calc(100% - var(--cds-scroll-fade-bottom) * 0.6),
+    #0000004d calc(100% - var(--cds-scroll-fade-bottom) * 0.45),
+    #00000026 calc(100% - var(--cds-scroll-fade-bottom) * 0.3),
+    #0000000d calc(100% - var(--cds-scroll-fade-bottom) * 0.15),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #0000000d calc(var(--cds-scroll-fade-top) * 0.15),
+    #00000026 calc(var(--cds-scroll-fade-top) * 0.3),
+    #0000004d calc(var(--cds-scroll-fade-top) * 0.45),
+    #00000080 calc(var(--cds-scroll-fade-top) * 0.6),
+    #000000b3 calc(var(--cds-scroll-fade-top) * 0.75),
+    #000000d9 calc(var(--cds-scroll-fade-top) * 0.87),
+    #000 var(--cds-scroll-fade-top),
+    #000 calc(100% - var(--cds-scroll-fade-bottom)),
+    #000000d9 calc(100% - var(--cds-scroll-fade-bottom) * 0.87),
+    #000000b3 calc(100% - var(--cds-scroll-fade-bottom) * 0.75),
+    #00000080 calc(100% - var(--cds-scroll-fade-bottom) * 0.6),
+    #0000004d calc(100% - var(--cds-scroll-fade-bottom) * 0.45),
+    #00000026 calc(100% - var(--cds-scroll-fade-bottom) * 0.3),
+    #0000000d calc(100% - var(--cds-scroll-fade-bottom) * 0.15),
+    transparent
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cds-pop {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ==========================================================================
+   CDS 兼容层：供应商 / 价格面板仍在用旧类，这里统一几何与控件外观。
+   新组件请直接用 Tailwind 语义类，不要往这里加规则。
+   ========================================================================== */
+
+/* 输入框：8px 圆角、发丝边、陶土双环焦点 */
+.text-input,
+.limit-input select {
+  background: var(--cds-surface-1);
+  border: 1px solid var(--cds-border);
+  border-radius: 8px;
+  color: var(--cds-text-primary);
+  padding: 5px 10px;
+  font-size: 13px;
+  transition: box-shadow var(--cds-dur-fast) var(--cds-ease-out-expo), border-color var(--cds-dur-fast);
+}
+
+.text-input::placeholder {
+  color: var(--cds-text-muted);
+}
+
+.text-input:focus,
+.limit-input select:focus {
+  outline: none;
+  border-color: transparent;
+  box-shadow: var(--cds-focus-shadow);
+}
+
+/* 按钮：28px 高、8px 圆角、幽灵底；主按钮用陶土 */
+.btn {
+  height: 28px;
+  border: 1px solid var(--cds-border);
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--cds-text-primary);
+  background: transparent;
+  transition: background-color var(--cds-dur-fast), border-color var(--cds-dur-fast), transform var(--cds-dur-snap) var(--cds-ease-press);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--cds-alpha-1);
+  border-color: var(--cds-border-strong);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn.primary {
+  background: var(--cds-clay);
+  border-color: transparent;
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--cds-clay-hover);
+  border-color: transparent;
+}
+
+.btn.danger {
+  color: var(--cds-fill-danger);
+}
+
+.btn.danger.armed {
+  background: color-mix(in srgb, var(--cds-fill-danger) 12%, transparent);
+  border-color: var(--cds-fill-danger);
+  color: var(--cds-fill-danger);
+}
+
+/* 表单卡片：不再叠第二层边框 */
+.form-card {
+  border: none;
+  border-radius: 10px;
+  background: var(--cds-alpha-1);
+  padding: 12px 14px;
+}
+
+/* 供应商主从布局 */
+.pv-layout {
+  border: 1px solid var(--cds-border);
+  border-radius: 10px;
+}
+
+.pv-sidebar {
+  background: var(--cds-surface-0);
+  border-right: 1px solid var(--cds-border);
+}
+
+.pv-item {
+  border-radius: 8px;
+  transition: background-color var(--cds-dur-fast);
+}
+
+.pv-item:hover {
+  background: var(--cds-alpha-1);
+}
+
+.pv-item.active {
+  background: var(--cds-alpha-2);
+  box-shadow: none;
+}
+
+.pv-item svg {
+  color: var(--cds-text-muted);
+}
+
+.pv-item.active svg {
+  color: var(--cds-clay);
+}
+
+.pv-dot {
+  background: var(--cds-fill-success);
+}
+
+.pv-dot.off {
+  background: var(--cds-border-strong);
+}
+
+.pv-detail-head > svg {
+  color: var(--cds-clay);
+}
+
+/* 模型条目：用填充区分，不用描边 */
+.model-item {
+  border: none;
+  border-radius: 8px;
+  background: var(--cds-alpha-1);
+}
+
+.model-item.editing {
+  background: var(--cds-alpha-2);
+}
+
+/* 内置供应商只读字段：去掉虚线框，改浅填充 */
+.pv-ro {
+  border: none;
+  border-radius: 8px;
+  background: var(--cds-alpha-1);
+  color: var(--cds-text-secondary);
+  padding: 6px 10px;
+}
+
+.pick-box {
+  border: 1px solid var(--cds-border);
+  border-radius: 8px;
+  background: var(--cds-surface-1);
+}
+
+/* 开关：36×20，开启用陶土 */
+.switch {
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--cds-alpha-3);
+  border: none;
+  position: relative;
+  transition: background-color var(--cds-dur-fast);
+}
+
+.switch::after {
+  width: 16px;
+  height: 16px;
+  top: 2px;
+  left: 2px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform var(--cds-dur-snap) var(--cds-ease-overshoot);
+}
+
+.switch.on {
+  background: var(--cds-clay);
+}
+
+.switch.on::after {
+  transform: translateX(16px);
+}
+
+/* 徽标与勾选框统一走陶土 */
+.badge {
+  border-radius: 6px;
+}
+
+.model-table input[type="checkbox"],
+.mini-check input[type="checkbox"],
+.pick-item input[type="checkbox"] {
+  accent-color: var(--cds-clay);
+}
+
+/* 侧栏滚动渐隐：只做底部淡出，避免首项被遮 */
+.app-nav {
+  --cds-scroll-fade-top: 0px;
+  --cds-scroll-fade-bottom: 12px;
+}
+
+section { scroll-margin-top: 56px; }
+
+
+/* ---------- 供应商面板：主从布局的 CDS 细化 ---------- */
+.pv-layout {
+  min-height: 560px;
+  border-radius: 12px;
+  background: var(--cds-surface-2);
+}
+.pv-sidebar {
+  width: 232px;
+  padding: 10px 8px;
+}
+.pv-item {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+.pv-item.active {
+  background: var(--cds-clay-soft);
+  box-shadow: inset 2px 0 0 var(--cds-clay);
+}
+.pv-group-label {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.pv-detail {
+  padding: 18px;
+  gap: 16px;
+}
+.detail-section {
+  background: var(--cds-alpha-1);
+  border-radius: 10px;
+  padding: 12px;
+}
+.detail-section > .kv-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cds-text-primary);
+}
+.model-item {
+  padding: 8px 12px;
+}
+.pv-add {
+  margin-top: 10px;
+  border: 1px dashed var(--cds-border);
+}
+.pv-detail-head {
+  font-size: 15px;
+}
+
+/* ---------- 供应商页：字体与字号统一 ---------- */
+.pv-sidebar {
+  width: 240px;
+}
+.pv-group-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--cds-text-muted);
+}
+.pv-item {
+  min-height: 34px;
+  font-size: 12.5px;
+}
+.pv-item-name {
+  font-size: 12.5px;
+}
+.pv-detail-head {
+  font-size: 14px;
+}
+.pv-detail-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.detail-section {
+  padding: 12px 14px;
+}
+.detail-section .kv-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--cds-text-muted);
+}
+.model-name {
+  font-size: 12px;
+}
+.mini-field,
+.mini-check {
+  font-size: 11.5px;
+}
+.pv-ro {
+  font-size: 12px;
+}
+.pv-empty-note {
+  font-size: 11.5px;
 }

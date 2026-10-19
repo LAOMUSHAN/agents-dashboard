@@ -6,6 +6,7 @@ import type {
   ZProviderEntry,
 } from "../../shared/types";
 import { api } from "../api";
+import { Panel } from "./ui/panel";
 import {
   Box,
   ChevronDown,
@@ -798,13 +799,6 @@ export function ProviderPanel() {
 
   const visible = config?.providers.filter((p) => !isCodingPlan(p)) ?? [];
   const selected = adding ? null : (visible.find((p) => p.id === selectedId) ?? null);
-  const builtins = visible.filter((p) => p.builtin);
-  const customs = visible.filter((p) => !p.builtin);
-  // 已停用的内置供应商默认折叠:多为系统不可用(额度用尽等),连接配置要去 ZCode 改,
-  // 列表里只留可直接管理 API Key 的可用项
-  const builtinActive = builtins.filter((p) => p.enabled);
-  const builtinDisabled = builtins.filter((p) => !p.enabled);
-  const [showDisabledBuiltin, setShowDisabledBuiltin] = useState(false);
 
   const renderItem = (p: ZProviderEntry) => (
     <button
@@ -826,12 +820,10 @@ export function ProviderPanel() {
   );
 
   return (
-    <div className="panel">
-      <div className="panel-title-row">
-        <div className="panel-title">
-          zcode 供应商
-          {config && <span className="panel-sub mono">{config.path}</span>}
-        </div>
+    <Panel
+      title="供应商"
+      sub={config ? `${visible.length} 个 · ${config.path}` : undefined}
+      actions={
         <button
           className="btn"
           disabled={loading}
@@ -841,47 +833,18 @@ export function ProviderPanel() {
           <RefreshCw size={12} className={loading ? "spin" : undefined} />
           {loading ? "刷新中…" : "刷新"}
         </button>
-      </div>
-      <p className="panel-hint">
-        修改直接写入 zcode 配置文件,每次写入前自动备份到同目录(config.json.bak-时间戳,保留最近
-        5 份);正在运行的 zcode 会话可能需重启才生效。
+      }
+    >
+      <p className="px-1 pb-3 text-[11px] leading-relaxed text-muted-foreground">
+        修改直接写入 zcode 配置文件，每次写入前自动备份到同目录（config.json.bak-时间戳，保留最近 5
+        份）；正在运行的 zcode 会话可能需重启才生效。
       </p>
-      {error && <p className="error-note">读取配置失败:{error}</p>}
+      {error && <p className="px-1 pb-3 text-[11px] text-danger">读取配置失败:{error}</p>}
 
       <div className="pv-layout">
         <div className="pv-sidebar">
-          {(builtinActive.length > 0 || builtinDisabled.length > 0) && (
-            <>
-              <div className="pv-group-label">内置供应商</div>
-              {builtinActive.map(renderItem)}
-              {builtinDisabled.length > 0 &&
-                (showDisabledBuiltin ? (
-                  <>
-                    {builtinDisabled.map(renderItem)}
-                    <button
-                      className="pv-item pv-toggle"
-                      onClick={() => setShowDisabledBuiltin(false)}
-                    >
-                      <ChevronDown size={12} />
-                      收起已停用
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="pv-item pv-toggle"
-                    onClick={() => setShowDisabledBuiltin(true)}
-                  >
-                    <ChevronRight size={12} />
-                    已停用 {builtinDisabled.length} 个
-                  </button>
-                ))}
-            </>
-          )}
-          <div className="pv-group-label">自定义供应商</div>
-          {customs.map(renderItem)}
-          {config && customs.length === 0 && (
-            <div className="pv-empty-note">暂无自定义供应商</div>
-          )}
+          <div className="pv-group-label">供应商 · {visible.length}</div>
+          {visible.map(renderItem)}
           <button
             className={"pv-item pv-add" + (adding ? " active" : "")}
             onClick={() => setAdding(true)}
@@ -902,6 +865,8 @@ export function ProviderPanel() {
           )}
         </div>
       </div>
-    </div>
+    </Panel>
   );
 }
+
+

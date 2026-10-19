@@ -62,10 +62,10 @@ export function YearCalendar({ points }: { points: DailyActivityPoint[] }) {
     calls === 0 || max === 0 ? 0 : Math.min(4, Math.ceil((calls / max) * 4));
   const CELL_COLORS = [
     "bg-muted",
-    "bg-sky-900/70 dark:bg-sky-950",
-    "bg-sky-700/70 dark:bg-sky-800",
-    "bg-sky-500/80 dark:bg-sky-600",
-    "bg-sky-400 dark:bg-sky-400",
+    "bg-clay/20",
+    "bg-clay/40",
+    "bg-clay/70",
+    "bg-clay",
   ];
 
   return (
