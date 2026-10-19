@@ -129,6 +129,21 @@ xattr -cr "/Applications/Agents Dashboard.app"
 
 > macOS 与 Linux 的打包路径沿用 Tauri 默认配置，本项目目前只在 Windows 上完整验证过。
 
+## 发布与自动推送
+
+- 版本号需在 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 三处保持一致。
+- 推送到 `main` 后，`.github/workflows/release.yml` 会读取 `package.json` 的版本：
+  - 该版本还没有 Release：在 Windows runner 上构建 NSIS/MSI，并创建 Release，更新日志由 GitHub 自动生成；
+  - 已有 Release：只跑一次轻量检查，不重复构建。
+- 本机可选安装 post-commit 钩子，让每次提交自动推送 `main`：
+
+  ```powershell
+  pwsh -ExecutionPolicy Bypass -File scripts/install-autopush.ps1
+  ```
+
+  停用：删除 `.git/hooks/post-commit`。钩子会把每次提交直接推到公开仓库，不想自动推送时删掉即可。
+- Release 资产是 Windows 安装包（NSIS `.exe` 与 MSI），未签名，SmartScreen 可能提示。
+
 ## 使用说明
 
 ### 主窗口
