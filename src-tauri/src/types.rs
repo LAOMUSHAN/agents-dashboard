@@ -494,9 +494,13 @@ pub struct ZProviderEntry {
     pub name: String,
     pub kind: Option<String>,
     pub source: Option<String>,
-    /// id 以 "builtin:" 开头的是 zcode 内置供应商
+    /// 智谱账号供应商(内置):面板只读
     pub builtin: bool,
-    /// enabled 字段缺失视为启用(自定义供应商通常没有这个字段)
+    /// 同 builtin,单独给前端分组用(账号覆盖行 + family 行)
+    pub preset: bool,
+    /// zcode 规则里的 group:standard-personal / zai-family / bigmodel-family
+    pub group: Option<String>,
+    /// enabled 字段缺失视为启用(zcode 自定义供应商通常不写这个字段)
     pub enabled: bool,
     pub system_disabled_reason: Option<String>,
     /// 显式改名:serde 的 camelCase 会把 base_url 变成 baseUrl,

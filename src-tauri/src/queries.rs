@@ -1611,7 +1611,7 @@ mod tests {
     use super::*;
 
     fn conn() -> Connection {
-        crate::db::open_db().expect("打开 zcode 库失败")
+        rusqlite::Connection::open_with_flags(crate::db::db_path(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("打开 zcode 库失败")
     }
 
     fn pricing_path() -> std::path::PathBuf {
@@ -1847,7 +1847,7 @@ mod tests {
         let range = Range { from: None, to: Some(now_ms() - 3_600_000) };
         let summary = get_summary(&conn, &range, &path).expect("get_summary");
         let models = get_model_stats(&conn, &range, &path).expect("get_model_stats");
-        let providers = get_provider_stats(&conn, &range, &path).expect("get_provider_stats");
+        let providers = get_provider_stats(&conn, &range, &path, &std::collections::HashMap::new()).expect("get_provider_stats");
         let projects = get_project_stats(&conn, &range, &path).expect("get_project_stats");
         let trend = get_trend(&conn, &range, &path).expect("get_trend");
 
@@ -1992,7 +1992,7 @@ mod tests {
         pricing::save(&path, &cfg).expect("写临时价格表");
 
         let projects = get_project_stats(&conn, &range, &path).expect("get_project_stats");
-        let providers = get_provider_stats(&conn, &range, &path).expect("get_provider_stats");
+        let providers = get_provider_stats(&conn, &range, &path, &std::collections::HashMap::new()).expect("get_provider_stats");
 
         let mut project_split = 0.0;
         for p in &projects {

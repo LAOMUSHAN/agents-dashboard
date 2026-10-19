@@ -53,7 +53,7 @@ Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你�
 
 ### 供应商与模型
 
-在面板里直接管理 ZCode 的供应商配置（启停、Base URL、API Key、模型与上下文上限、图像/视频输入能力，可从接口拉取模型列表），写盘前自动备份。下方是模型单价表：每个模型可单独设置币种、四项单价、峰谷倍率与长上下文加价，并在右侧实时给出该模型的估算费用。
+在面板里直接管理 ZCode 的供应商配置（启停、Base URL、API Key、模型与上下文上限、图像/视频输入能力，可从接口拉取模型列表）：列表顺序与 ZCode「模型设置」一致（智谱账号供应商在前，自定义供应商按 `providerOrder` 排列），写盘前自动备份。下方是模型单价表：每个模型可单独设置币种、四项单价、峰谷倍率与长上下文加价，并在右侧实时给出该模型的估算费用。
 
 ![供应商与模型](docs/images/providers.png)
 
@@ -69,7 +69,7 @@ Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你�
 - **用量明细**：供应商 / 模型 / 项目三个视角的完整指标表，带占比条与命中率药丸，表头吸顶
 - **健康与性能**：错误分组、模型延迟百分位、工具调用统计，标签页徽标直接显示错误数
 - **请求日志**：按会话分组的树形明细，请求序号、耗时瀑布与 token 构成条，子代理请求缩进挂在父会话下，按会话分页
-- **供应商与模型**：面板内管理 ZCode 供应商配置（写前自动备份），并维护每个模型的单价
+- **供应商与模型**：与 ZCode「模型设置」同序的供应商列表（智谱账号供应商只读、自定义供应商可编辑，写前自动备份），并维护每个模型的单价
 - **费用估算**：逐请求计价、按模型分币种、逐模型峰谷与长上下文加价、缓存节省估算（见下文口径说明）
 - **系统托盘常驻**：主窗口关闭时自动隐藏至托盘后台运行，单击托盘图标即可快速唤回
 - **单实例保护**：重复启动只会唤起已有窗口，避免多个实例互相覆盖配置
@@ -168,7 +168,7 @@ xattr -cr "/Applications/Agents Dashboard.app"
 
 ### 管理 ZCode 供应商配置
 
-「供应商与模型」上半部分列出 `~/.zcode/v2/config.json` 里的全部供应商：开关启停、编辑 Base URL 与 API Key（已设置的 Key 只显示尾 4 位，不回传明文）、增删改模型及其上下文/输出上限与图像/视频输入能力，也能从供应商接口拉取模型列表勾选导入。每次写入前自动备份到同目录（`config.json.bak-时间戳`，保留最近 5 份）；已在运行的 ZCode 会话可能需要重启才生效。
+「供应商与模型」上半部分与 ZCode「模型设置」保持同序：智谱账号供应商（Z.ai / BigModel 家族与套餐）只读展示；自定义供应商按 `providerOrder` 排列，可开关启停、编辑 Base URL 与 API Key（已设置的 Key 只显示尾 4 位，不回传明文）、增删改模型及其上下文/输出上限与图像/视频输入能力，也能从供应商接口拉取模型列表勾选导入。配置写入 `~/.zcode/v2/provider_config.json`，每次写入前自动备份到同目录（`provider_config.json.bak-时间戳`，保留最近 5 份）；已在运行的 ZCode 会话可能需要重启才生效。
 
 ## 数据来源与隐私
 
@@ -177,7 +177,8 @@ xattr -cr "/Applications/Agents Dashboard.app"
 | 文件 | 默认路径 | 用途 | 可覆盖 |
 | --- | --- | --- | --- |
 | ZCode 数据库 | `~/.zcode/cli/db/db.sqlite` | 用量、会话、工具调用统计 | `ZCODE_DB_PATH` |
-| ZCode 配置 | `~/.zcode/v2/config.json` | 供应商展示名与模型列表（面板可写，写前备份） | `ZCODE_CONFIG_PATH` |
+| ZCode 供应商配置 | `~/.zcode/v2/provider_config.json` | 供应商、模型与启停状态（面板可写，写前备份） | `ZCODE_PROVIDER_CONFIG_PATH` |
+| ZCode 旧版配置 | `~/.zcode/v2/config.json` | 仅作旧 provider id 的展示名兜底（只读） | `ZCODE_CONFIG_PATH` |
 
 统计口径：
 
@@ -202,7 +203,7 @@ ZCODE_DB_PATH=/path/to/other.db npx tauri dev
 ```
 src/          前端页面与组件（components/）
 src-tauri/    Rust 后端：db.rs（只读连接）、queries.rs（SQL 聚合）、pricing.rs（单价与计费）、
-              providers.rs / zconfig.rs（ZCode 供应商配置读写）、lib.rs（invoke 命令注册）
+              providers.rs / personal.rs（ZCode 供应商配置读写）、lib.rs（invoke 命令注册）
 shared/       前后端共享类型（前端直接引用，Rust 端 types.rs 与之对应）
 docs/         截图（模拟数据）与开发计划文档
 server/       早期 Web 版 Express 后端的遗留副本，构建不引用

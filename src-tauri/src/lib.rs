@@ -1,11 +1,11 @@
 mod db;
 mod error;
+mod personal;
 mod pricing;
 mod providers;
 mod queries;
 mod sources;
 mod types;
-mod zconfig;
 
 use error::AppError;
 use sources::DataSource;
@@ -363,27 +363,27 @@ fn get_meta(state: tauri::State<AppState>) -> Meta {
     }
 }
 
-// ---------- zcode 供应商配置管理(读写 ~/.zcode/v2/config.json) ----------
+// ---------- zcode 供应商配置管理(读写 ~/.zcode/v2/provider_config.json) ----------
 // 每个写命令都返回写后的完整配置,前端直接用响应刷新列表,不必再发一次查询
 
 #[tauri::command]
 fn get_provider_config() -> Result<types::ZProviderConfig, String> {
-    zconfig::load_default()
+    personal::load_default()
 }
 
 #[tauri::command]
 fn set_provider_enabled(id: String, enabled: bool) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| zconfig::set_enabled(doc, &id, enabled))
+    personal::update_default(|doc| personal::set_enabled(doc, &id, enabled))
 }
 
 #[tauri::command]
 fn set_provider_base_url(id: String, url: Option<String>) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| zconfig::set_base_url(doc, &id, url))
+    personal::update_default(|doc| personal::set_base_url(doc, &id, url))
 }
 
 #[tauri::command]
 fn set_provider_api_key(id: String, key: Option<String>) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| zconfig::set_api_key(doc, &id, key))
+    personal::update_default(|doc| personal::set_api_key(doc, &id, key))
 }
 
 #[tauri::command]
@@ -395,14 +395,14 @@ fn add_provider_model(
     input_image: bool,
     input_video: bool,
 ) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| {
-        zconfig::add_model(doc, &id, &model, context_limit, output_limit, input_image, input_video)
+    personal::update_default(|doc| {
+        personal::add_model(doc, &id, &model, context_limit, output_limit, input_image, input_video)
     })
 }
 
 #[tauri::command]
 fn remove_provider_model(id: String, model: String) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| zconfig::remove_model(doc, &id, &model))
+    personal::update_default(|doc| personal::remove_model(doc, &id, &model))
 }
 
 #[tauri::command]
@@ -412,8 +412,8 @@ fn set_provider_model_limits(
     context_limit: Option<i64>,
     output_limit: Option<i64>,
 ) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| {
-        zconfig::set_model_limits(doc, &id, &model, context_limit, output_limit)
+    personal::update_default(|doc| {
+        personal::set_model_limits(doc, &id, &model, context_limit, output_limit)
     })
 }
 
@@ -424,20 +424,20 @@ fn set_provider_model_input_modalities(
     image: bool,
     video: bool,
 ) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| {
-        zconfig::set_model_input_modalities(doc, &id, &model, image, video)
+    personal::update_default(|doc| {
+        personal::set_model_input_modalities(doc, &id, &model, image, video)
     })
 }
 
 /// 从供应商接口拉取可用模型(OpenAI 兼容);网络请求在命令线程上同步执行,10s 超时
 #[tauri::command]
 fn fetch_provider_models(id: String) -> Result<Vec<String>, String> {
-    zconfig::fetch_remote_models(&id)
+    personal::fetch_remote_models(&id)
 }
 
 #[tauri::command]
 fn add_provider_models(id: String, models: Vec<String>) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| zconfig::add_models(doc, &id, &models).map(|_| ()))
+    personal::update_default(|doc| personal::add_models(doc, &id, &models).map(|_| ()))
 }
 
 /// add_provider 的响应:newId 是新生成的供应商 key,前端用它定位并展开新行
@@ -456,8 +456,8 @@ fn add_provider(
     api_key: Option<String>,
 ) -> Result<AddProviderResponse, String> {
     let mut new_id = String::new();
-    let config = zconfig::update_default(|doc| {
-        new_id = zconfig::add_provider(doc, &name, &kind, base_url, api_key)?;
+    let config = personal::update_default(|doc| {
+        new_id = personal::add_provider(doc, &name, &kind, base_url, api_key)?;
         Ok(())
     })?;
     Ok(AddProviderResponse { config, new_id })
@@ -465,7 +465,7 @@ fn add_provider(
 
 #[tauri::command]
 fn remove_provider(id: String) -> Result<types::ZProviderConfig, String> {
-    zconfig::update_default(|doc| zconfig::remove_provider(doc, &id))
+    personal::update_default(|doc| personal::remove_provider(doc, &id))
 }
 
 /// 唤醒并聚焦主窗口。

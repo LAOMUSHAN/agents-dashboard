@@ -286,14 +286,44 @@ function ModelItem({
 
 /** 新增供应商表单(详情区展示,成功后选中并展开新供应商) */
 const KIND_OPTIONS = [
-  { value: "anthropic", label: "Anthropic 协议" },
-  { value: "openai-compatible", label: "OpenAI 兼容协议" },
+  { value: "anthropic-messages", label: "Anthropic Messages" },
+  { value: "openai-chat-completions", label: "OpenAI Chat Completions" },
+  { value: "openai-responses", label: "OpenAI Responses" },
 ];
 
-// zcode 内置的订阅制条目(BigModel/Z.ai 的 Coding Plan 系列)由 ZCode 账号体系管理,
-// 这里无法配置,面板直接不展示
-function isCodingPlan(p: ZProviderEntry): boolean {
-  return p.builtin && p.name.toLowerCase().includes("coding plan");
+const KIND_LABELS: Record<string, string> = Object.fromEntries(
+  KIND_OPTIONS.map((k) => [k.value, k.label]),
+);
+
+/** api.type 是 zcode 的协议枚举,界面上换成可读名;未知值原样显示 */
+function kindLabel(kind: string | null): string | null {
+  if (!kind) return null;
+  return KIND_LABELS[kind] ?? kind;
+}
+
+/** 智谱账号供应商的模型条目:只读,复用模型条目的徽标排版 */
+function ReadonlyModelList({ models }: { models: ZModelEntry[] }) {
+  if (models.length === 0) {
+    return <div className="muted-note model-empty">该账号供应商暂无独立模型配置</div>;
+  }
+  return (
+    <div className="model-list">
+      {models.map((m) => (
+        <div className="model-item" key={m.name}>
+          <span className="model-name">{m.name}</span>
+          {(m.contextLimit !== null || m.outputLimit !== null) && (
+            <span className="badge plain" title="上下文 / 输出上限">
+              {m.contextLimit !== null ? fmtLimit(m.contextLimit) : "—"}
+              {" / "}
+              {m.outputLimit !== null ? fmtLimit(m.outputLimit) : "—"}
+            </span>
+          )}
+          {m.inputImage && <span className="badge info">图像</span>}
+          {m.inputVideo && <span className="badge info">视频</span>}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function NewProviderForm({
@@ -494,11 +524,9 @@ function ProviderDetail({
   return (
     <>
       <div className="pv-detail-head">
-        {p.builtin ? <Sparkles size={16} /> : <Box size={16} />}
+        <Box size={16} />
         <span className="pv-detail-name">{p.name}</span>
-        <span className={"badge " + (p.builtin ? "info" : "plain")}>
-          {p.builtin ? "内置" : "自定义"}
-        </span>
+        <span className="badge plain">自定义</span>
         <span className={"badge " + (p.enabled ? "ok" : "warn")}>
           {p.enabled ? "已启用" : "已停用"}
         </span>
@@ -506,12 +534,7 @@ function ProviderDetail({
           <span className="muted-note">系统禁用:{p.systemDisabledReason}</span>
         )}
         <span className="spacer" />
-        {/* 内置供应商只管理 API Key 这一种连接方式;自定义按协议展示 */}
-        {p.builtin ? (
-          <span className="muted-note">连接方式 API Key</span>
-        ) : (
-          p.kind && <span className="muted-note">连接方式 {p.kind}</span>
-        )}
+        {p.kind && <span className="muted-note">连接方式 {kindLabel(p.kind)}</span>}
         <button
           role="switch"
           aria-checked={p.enabled}
@@ -520,47 +543,35 @@ function ProviderDetail({
           title={p.enabled ? "点击禁用该供应商" : "点击启用该供应商"}
           onClick={() => run(() => api.setProviderEnabled(p.id, !p.enabled))}
         />
-        {!p.builtin && (
-          <DangerousButton
-            label="删除"
-            confirmLabel="确认删除?"
-            disabled={busy}
-            onConfirm={() => void run(() => api.removeProvider(p.id))}
-          />
-        )}
+        <DangerousButton
+          label="删除"
+          confirmLabel="确认删除?"
+          disabled={busy}
+          onConfirm={() => void run(() => api.removeProvider(p.id))}
+        />
       </div>
-
-      {p.builtin && (
-        <div className="muted-note">
-          此处仅管理内置供应商的 API Key,其他连接方式(如账号登录)请在 ZCode 中操作
-        </div>
-      )}
 
       <div className="detail-section">
         <div className="kv-label">Base URL</div>
-        {p.builtin ? (
-          <div className="pv-ro">{p.baseURL ?? "未设置"}</div>
-        ) : (
-          <div className="form-row">
-            <label className="form-field grow">
-              <input
-                className="text-input"
-                value={baseUrlDraft}
-                placeholder={p.baseURL ?? "未设置"}
-                onChange={(e) => setBaseUrlDraft(e.target.value)}
-              />
-            </label>
-            <button
-              className="btn"
-              disabled={busy || baseUrlDraft === (p.baseURL ?? "")}
-              onClick={() =>
-                run(() => api.setProviderBaseUrl(p.id, baseUrlDraft.trim() ? baseUrlDraft : null))
-              }
-            >
-              保存
-            </button>
-          </div>
-        )}
+        <div className="form-row">
+          <label className="form-field grow">
+            <input
+              className="text-input"
+              value={baseUrlDraft}
+              placeholder={p.baseURL ?? "未设置"}
+              onChange={(e) => setBaseUrlDraft(e.target.value)}
+            />
+          </label>
+          <button
+            className="btn"
+            disabled={busy || baseUrlDraft === (p.baseURL ?? "")}
+            onClick={() =>
+              run(() => api.setProviderBaseUrl(p.id, baseUrlDraft.trim() ? baseUrlDraft : null))
+            }
+          >
+            保存
+          </button>
+        </div>
       </div>
 
       <div className="detail-section">
@@ -754,9 +765,34 @@ function ProviderDetail({
   );
 }
 
+/** 智谱账号供应商(Z.ai / BigModel 家族与账号覆盖行):由 ZCode 账号体系管理,只读 */
+function PresetDetail({ p }: { p: ZProviderEntry }) {
+  return (
+    <>
+      <div className="pv-detail-head">
+        <Sparkles size={16} />
+        <span className="pv-detail-name">{p.name}</span>
+        <span className="badge info">智谱</span>
+        <span className="badge ok">账号供应商</span>
+        <span className="spacer" />
+        <span className="muted-note">由 ZCode 账号管理</span>
+      </div>
+      <div className="muted-note">
+        {p.id.startsWith("family:")
+          ? "该家族通过 ZCode 账号登录/套餐连接，连接方式与启用状态请在 ZCode 的模型设置里调整。"
+          : "该条目是 ZCode 账号供应商在个人配置里的覆盖项，此处只读。"}
+      </div>
+      <div className="detail-section">
+        <div className="kv-label">模型列表</div>
+        <ReadonlyModelList models={p.models} />
+      </div>
+    </>
+  );
+}
+
 /**
- * zcode 供应商面板:左侧供应商列表(内置/自定义分组 + 添加入口),
- * 右侧为选中项的连接与模型配置。修改直接写入 zcode 配置文件(自动备份)。
+ * zcode 供应商面板:左侧按「模型设置」页的顺序列出智谱账号供应商与自定义供应商,
+ * 右侧为选中项的连接与模型配置。自定义供应商的修改写入 provider_config.json(自动备份)。
  */
 export function ProviderPanel() {
   const [config, setConfig] = useState<ZProviderConfig | null>(null);
@@ -782,12 +818,14 @@ export function ProviderPanel() {
     void reload();
   }, []);
 
-  // 配置刷新后修正选中项:未选中、选中项被删除或被隐藏时,回退到可见列表第一项
+  // 配置刷新后修正选中项:未选中、选中项被删除时,回退到第一个自定义供应商
+  //(智谱行只读,默认选中它会让面板一进来就是只读说明)
   useEffect(() => {
     if (!config || adding) return;
-    const visible = config.providers.filter((p) => !isCodingPlan(p));
+    const visible = config.providers;
     if (selectedId && visible.some((p) => p.id === selectedId)) return;
-    setSelectedId(visible[0]?.id ?? null);
+    const first = visible.find((p) => !p.preset) ?? visible[0];
+    setSelectedId(first?.id ?? null);
   }, [config, selectedId, adding]);
 
   const handleAdded = (r: ZProviderAddResult) => {
@@ -797,24 +835,28 @@ export function ProviderPanel() {
     setSelectedId(r.newId);
   };
 
-  const visible = config?.providers.filter((p) => !isCodingPlan(p)) ?? [];
+  const visible = config?.providers ?? [];
+  const preset = visible.filter((p) => p.preset);
+  const custom = visible.filter((p) => !p.preset);
   const selected = adding ? null : (visible.find((p) => p.id === selectedId) ?? null);
 
   const renderItem = (p: ZProviderEntry) => (
     <button
       key={p.id}
       className={"pv-item" + (selected?.id === p.id ? " active" : "")}
-      title={p.id}
+      title={p.preset ? "ZCode 账号供应商(只读)" : p.id}
       onClick={() => {
         setAdding(false);
         setSelectedId(p.id);
       }}
     >
-      {p.builtin ? <Sparkles size={13} /> : <Box size={13} />}
+      {p.preset ? <Sparkles size={13} /> : <Box size={13} />}
       <span className="pv-item-name">{p.name}</span>
       <span
-        className={"pv-dot" + (p.enabled ? "" : " off")}
-        title={p.enabled ? "已启用" : "已停用"}
+        className={
+          "pv-dot" + (p.preset ? " plan" : p.enabled ? "" : " off")
+        }
+        title={p.preset ? "账号供应商" : p.enabled ? "已启用" : "已停用"}
       />
     </button>
   );
@@ -822,12 +864,12 @@ export function ProviderPanel() {
   return (
     <Panel
       title="供应商"
-      sub={config ? `${visible.length} 个 · ${config.path}` : undefined}
+      sub={config ? `${custom.length} 个自定义 · ${config.path}` : undefined}
       actions={
         <button
           className="btn"
           disabled={loading}
-          title="重新读取配置文件(zcode CLI 等外部改动也一并生效)"
+          title="重新读取配置文件(zcode 客户端等外部改动也一并生效)"
           onClick={() => void reload()}
         >
           <RefreshCw size={12} className={loading ? "spin" : undefined} />
@@ -836,15 +878,21 @@ export function ProviderPanel() {
       }
     >
       <p className="px-1 pb-3 text-[11px] leading-relaxed text-muted-foreground">
-        修改直接写入 zcode 配置文件，每次写入前自动备份到同目录（config.json.bak-时间戳，保留最近 5
-        份）；正在运行的 zcode 会话可能需重启才生效。
+        列表顺序与 zcode「模型设置」一致；修改写入 ~/.zcode/v2/provider_config.json，每次写入前自动备份到同目录（provider_config.json.bak-时间戳，保留最近
+        5 份）；正在运行的 zcode 会话可能需重启才生效。
       </p>
       {error && <p className="px-1 pb-3 text-[11px] text-danger">读取配置失败:{error}</p>}
 
       <div className="pv-layout">
         <div className="pv-sidebar">
-          <div className="pv-group-label">供应商 · {visible.length}</div>
-          {visible.map(renderItem)}
+          {preset.length > 0 && (
+            <>
+              <div className="pv-group-label">智谱</div>
+              {preset.map(renderItem)}
+            </>
+          )}
+          <div className="pv-group-label">自定义供应商 · {custom.length}</div>
+          {custom.map(renderItem)}
           <button
             className={"pv-item pv-add" + (adding ? " active" : "")}
             onClick={() => setAdding(true)}
@@ -857,7 +905,11 @@ export function ProviderPanel() {
           {adding ? (
             <NewProviderForm onAdded={handleAdded} onCancel={() => setAdding(false)} />
           ) : selected ? (
-            <ProviderDetail key={selected.id} p={selected} onChanged={setConfig} />
+            selected.preset ? (
+              <PresetDetail p={selected} />
+            ) : (
+              <ProviderDetail key={selected.id} p={selected} onChanged={setConfig} />
+            )
           ) : (
             <div className="empty">
               {config ? "从左侧选择供应商,或点击「添加供应商」" : "加载中…"}

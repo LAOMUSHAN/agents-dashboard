@@ -1675,6 +1675,11 @@ td .badge {
   background: var(--cds-border-strong);
 }
 
+/* 智谱账号供应商:陶土点,与自定义供应商的绿/灰点区分 */
+.pv-dot.plan {
+  background: var(--cds-clay);
+}
+
 .pv-detail-head > svg {
   color: var(--cds-clay);
 }

@@ -53,10 +53,10 @@ export const api = {
   // 价格估算:传当前编辑中的价格(未保存也可),后端按逐请求口径算该模型在范围内的金额(美元)
   estimateCost: (modelId: string, entry: PriceEntry, range: Range) =>
     invoke<number>("estimate_cost", { range, modelId, entry }),
-  // zcode 供应商配置管理(读写 ~/.zcode/v2/config.json,后端自动备份);
+  // zcode 供应商配置管理(读写 ~/.zcode/v2/provider_config.json,后端自动备份);
   // 写命令返回写后的完整配置,直接用响应刷新列表
   providerConfig: () => invoke<ZProviderConfig>("get_provider_config"),
-  // 新增自定义供应商(写入 config.json,后端自动备份),返回新 id 供前端展开
+  // 新增自定义供应商(写入 provider_config.json,后端自动备份),返回新 id 供前端展开
   addProvider: (name: string, kind: string, baseUrl: string | null, apiKey: string | null) =>
     invoke<ZProviderAddResult>("add_provider", { name, kind, baseUrl, apiKey }),
   // 删除自定义供应商(内置供应商后端会拒绝)

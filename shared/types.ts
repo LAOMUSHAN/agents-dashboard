@@ -356,36 +356,41 @@ export interface MonthPoint {
   cost: number;
 }
 
-/** 供应商下单个模型的配置(config.json 里 models 映射的扁平化视图) */
+/** 供应商下单个模型的配置(provider_config.json 模型规则 + 模型顺序的扁平化视图) */
 export interface ZModelEntry {
-  /** models 映射的 key,即模型名 */
+  /** 模型 ID(personalModelIds / modelOrder 里的字符串) */
   name: string;
-  /** limit.context(上下文上限 token);字段缺失时为 null */
+  /** properties.contextWindow(上下文上限 token);字段缺失时为 null */
   contextLimit: number | null;
-  /** limit.output */
+  /** optionSpecs.maxOutputTokens.max */
   outputLimit: number | null;
-  /** modalities.input 数组里含 "image" */
+  /** properties.inputFormat.supportsImage */
   inputImage: boolean;
-  /** modalities.input 数组里含 "video" */
+  /** properties.inputFormat.supportsVideo */
   inputVideo: boolean;
 }
 
-/** zcode 配置文件(~/.zcode/v2/config.json)里的单个供应商条目;apiKey 不回传明文 */
+/** zcode 供应商配置(~/.zcode/v2/provider_config.json)里的单个条目;apiKey 不回传明文 */
 export interface ZProviderEntry {
   id: string;
   name: string;
+  /** api.type:anthropic-messages / openai-chat-completions / openai-responses */
   kind: string | null;
   source: string | null;
-  /** id 以 "builtin:" 开头的是 zcode 内置供应商 */
+  /** 智谱账号供应商(内置),面板只读 */
   builtin: boolean;
-  /** enabled 字段缺失视为启用(自定义供应商通常没有这个字段) */
+  /** 同 builtin;账号覆盖行与 family 行都归入智谱区 */
+  preset: boolean;
+  /** zcode 规则里的 group:standard-personal / zai-family / bigmodel-family */
+  group: string | null;
+  /** enabled 字段缺失视为启用 */
   enabled: boolean;
   systemDisabledReason: string | null;
   baseURL: string | null;
   hasApiKey: boolean;
   /** apiKey 尾 4 位;密钥过短时为 null,界面只显示"已设置" */
   apiKeyHint: string | null;
-  /** 该供应商可用的模型配置列表 */
+  /** 该供应商可用的模型配置列表(按 modelOrder 排序) */
   models: ZModelEntry[];
 }
 
