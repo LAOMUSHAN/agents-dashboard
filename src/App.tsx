@@ -158,7 +158,23 @@ export default function App() {
   const setRefreshSec = (sec: number) => {
     localStorage.setItem(REFRESH_KEY, String(sec));
     setRefreshSecState(sec);
+    api.saveUiPrefs({ refreshSec: sec }).catch(() => undefined);
   };
+
+  // 刷新间隔以配置文件为准（localStorage 只作即时缓存），
+  // 修掉 WebView 存储被清理或 dev/release 换源后重启回到 5 秒的问题
+  useEffect(() => {
+    api
+      .getUiPrefs()
+      .then((prefs) => {
+        const v = Number(prefs.refreshSec);
+        if (REFRESH_OPTIONS.includes(v)) {
+          localStorage.setItem(REFRESH_KEY, String(v));
+          setRefreshSecState(v);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
 
   // 汇率:金额统一以美元存储,各费用单元格再按该行价格表的币种换算(改完单价后由 reloadKey 重新拉取)
   useEffect(() => {

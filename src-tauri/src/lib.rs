@@ -238,6 +238,31 @@ async fn get_requests(
     .map_err(|e| AppError::Task(e.to_string()))?
 }
 
+/// 界面偏好的落盘位置：与 pricing.json 同目录。
+/// WebView 的 localStorage 会随数据目录清理或 dev/release 源切换而丢失，偏好走文件更稳。
+fn ui_prefs_path(state: &AppState) -> std::path::PathBuf {
+    state.pricing_path.with_file_name("ui-prefs.json")
+}
+
+#[tauri::command]
+fn get_ui_prefs(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let path = ui_prefs_path(&state);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({}))),
+        Err(_) => Ok(serde_json::json!({})),
+    }
+}
+
+#[tauri::command]
+fn save_ui_prefs(state: tauri::State<'_, AppState>, prefs: serde_json::Value) -> Result<(), String> {
+    let path = ui_prefs_path(&state);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_tools(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::ToolStat>, String> {
     with_conn!(state, conn, _guard);
@@ -554,6 +579,8 @@ pub fn run() {
             get_projects,
             get_providers,
             get_requests,
+            get_ui_prefs,
+            save_ui_prefs,
             get_tools,
             get_errors,
             get_latency,

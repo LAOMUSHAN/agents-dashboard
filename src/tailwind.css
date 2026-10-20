@@ -145,3 +145,29 @@
     outline-offset: 2px;
   }
 }
+
+/* 窄窗时模型列只完整显示一枚 chip：第二枚隐藏，+N 换成 n-1（第二枚仍留在 DOM 里供测量） */
+.model-compact .model-chip-2 {
+  display: none;
+}
+.model-compact .model-plus-when-compact {
+  display: inline;
+}
+
+/* 时间列分段截断：秒 → 分 → 时，日期永远保留；隐藏测量时去掉 time-l* 类量完整时间戳 */
+.time-l1 .time-ss {
+  display: none;
+}
+.time-l2 .time-mm,
+.time-l2 .time-ss {
+  display: none;
+}
+.time-l3 .time-wrap {
+  display: none;
+}
+
+/* 宽窗余量变列间距：第 2 列起左内边距 += var(--col-gap)，首列左缘与末列右缘不动 */
+.col-gap th + th,
+.col-gap td + td {
+  padding-left: calc(8px + var(--col-gap, 0px));
+}

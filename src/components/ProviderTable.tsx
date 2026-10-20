@@ -113,6 +113,7 @@ export function ProviderTable({
           ttft: m.avgTtftMs,
           cost: fmtCostIn(m.cost, m.currency),
           errors: 0,
+          priced: m.priced,
         })),
       }));
     }

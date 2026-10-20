@@ -13,6 +13,29 @@ const PRESETS: Array<{ key: Preset; label: string }> = [
   { key: "all", label: "全部" },
 ];
 
+// 时间范围记住上次选择:重启后不再回到「今天」而让所有面板变空。
+// 自定义范围连同起止日期一起存,取不到合法值时回落到「今天」
+const PRESET_KEY = "rangePreset";
+const CUSTOM_KEY = "rangeCustom";
+const PRESET_KEYS: Preset[] = ["today", "yesterday", "7d", "30d", "all", "custom"];
+
+function readStoredPreset(): Preset {
+  const v = localStorage.getItem(PRESET_KEY) as Preset | null;
+  return v && PRESET_KEYS.includes(v) ? v : "today";
+}
+
+function readStoredCustom(): { from: string; to: string } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? "null") as { from?: unknown; to?: unknown } | null;
+    if (raw && typeof raw.from === "string" && typeof raw.to === "string") {
+      return { from: raw.from, to: raw.to };
+    }
+  } catch {
+    // 坏数据按未设置处理
+  }
+  return { from: "", to: "" };
+}
+
 function startOfToday(): number {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -35,22 +58,36 @@ export function useRange(): {
   setCustom: (from: string, to: string) => void;
   range: Range;
 } {
-  const [preset, setPresetState] = useState<Preset>("today");
-  const [customFrom, setCustomFrom] = useState("");
-  const [customTo, setCustomTo] = useState("");
+  const [storedCustom] = useState(readStoredCustom);
+  const [storedPreset] = useState(readStoredPreset);
+  // 存的是 custom 但日期已丢失时,回落到今天,避免首屏跑一次全量查询
+  const initialPreset: Preset =
+    storedPreset === "custom" && !storedCustom.from && !storedCustom.to ? "today" : storedPreset;
+  const [preset, setPresetState] = useState<Preset>(initialPreset);
+  const [customFrom, setCustomFrom] = useState(initialPreset === "custom" ? storedCustom.from : "");
+  const [customTo, setCustomTo] = useState(initialPreset === "custom" ? storedCustom.to : "");
 
   const setPreset = (p: Preset) => {
     setPresetState(p);
+    localStorage.setItem(PRESET_KEY, p);
     if (p !== "custom") {
       setCustomFrom("");
       setCustomTo("");
+      localStorage.removeItem(CUSTOM_KEY);
     }
   };
 
   const setCustom = (from: string, to: string) => {
     setCustomFrom(from);
     setCustomTo(to);
-    if (from || to) setPresetState("custom");
+    if (from || to) {
+      setPresetState("custom");
+      localStorage.setItem(PRESET_KEY, "custom");
+      localStorage.setItem(CUSTOM_KEY, JSON.stringify({ from, to }));
+    } else {
+      // 清空自定义范围:丢掉旧日期,免得重启后又把上一次的区间捞回来
+      localStorage.removeItem(CUSTOM_KEY);
+    }
   };
 
   // 用 useMemo 稳定 range 的对象身份,避免依赖它的 useEffect 无限循环。

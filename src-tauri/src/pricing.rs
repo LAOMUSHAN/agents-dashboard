@@ -260,6 +260,16 @@ impl PricingConfig {
         let Some(entry) = self.models.get(model_id) else {
             return RowCost { cost: 0.0, saving: 0.0, priced: false, is_cny: false };
         };
+        // 条目存在但四项单价全 0:导入模型时自动建的占位条目、清空价格后留下的都是全 0,
+        // 对用户来说等同于「没配置价格」,费用恒为 0,标成未计价才能提示补价
+        if entry.input == 0.0 && entry.output == 0.0 && entry.cache_read == 0.0 && entry.cache_write == 0.0 {
+            return RowCost {
+                cost: 0.0,
+                saving: 0.0,
+                priced: false,
+                is_cny: is_cny_currency(entry.currency.as_deref()),
+            };
+        }
         let (p_in, p_out, p_read, p_write) = self.price_for_minute(entry, minute, input_tokens);
         let miss = (input_tokens - cache_read_tokens).max(0) as f64;
         let read = cache_read_tokens.max(0) as f64;
@@ -380,5 +390,20 @@ mod tests {
         assert!(is_cny_currency(Some("¥")));
         assert!(!is_cny_currency(Some("usd")));
         assert!(!is_cny_currency(None));
+    }
+
+    /// 全 0 的占位条目(导入模型自动建、清空价格后留下的)视为未配置价格;
+    /// 任意一项单价非 0 仍算已配置
+    #[test]
+    fn all_zero_entry_counts_as_unpriced() {
+        let mut cfg = default_config();
+        cfg.models.insert("placeholder".into(), entry(0.0, 0.0, 0.0));
+        let (cost, priced) = cfg.cost_row("placeholder", 0, 1_000_000, 1_000_000, 0, 0);
+        assert_eq!(cost, 0.0);
+        assert!(!priced);
+        // 只配了缓存读价也算已配置
+        cfg.models.insert("cache-only".into(), entry(0.0, 0.0, 0.02));
+        let (_, priced) = cfg.cost_row("cache-only", 0, 1_000_000, 0, 1_000_000, 0);
+        assert!(priced);
     }
 }

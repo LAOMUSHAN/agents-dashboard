@@ -172,6 +172,8 @@ export interface ProviderModelStat {
   cost: number;
   /** 该模型价格条目的币种;缺省 null 按美元。费用列符号与「模型单价」一致 */
   currency?: string | null;
+  /** 该模型是否配置了单价;false 时展开行也显示「未配置价格」 */
+  priced: boolean;
 }
 
 /** 按供应商(provider_id)汇总的统计;name 来自 zcode 配置文件,未收录时等于 providerId */

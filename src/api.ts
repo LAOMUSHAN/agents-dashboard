@@ -41,6 +41,9 @@ export const api = {
   // 分页单位是根会话:每页返回 N 个主会话(含其子代理请求)
   requests: (range: Range, page: number, pageSize = 10) =>
     invoke<RequestLogResponse>("get_requests", { range, page, pageSize }),
+  // 界面偏好：与 pricing.json 同目录的 ui-prefs.json，跨 dev/release 与数据清理都稳定
+  getUiPrefs: () => invoke<Record<string, unknown>>("get_ui_prefs"),
+  saveUiPrefs: (prefs: Record<string, unknown>) => invoke<void>("save_ui_prefs", { prefs }),
   tools: (range: Range) => invoke<ToolStat[]>("get_tools", { range }),
   agents: (range: Range) => invoke<AgentStat[]>("get_agents", { range }),
   errors: (range: Range) => invoke<ErrorStats>("get_errors", { range }),

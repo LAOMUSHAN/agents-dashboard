@@ -300,6 +300,8 @@ pub struct ProviderModelStat {
     pub cost: f64,
     /// 该模型价格表条目的币种;缺省 None 按美元。费用列展示符号与「模型单价」一致
     pub currency: Option<String>,
+    /// 该模型是否在价格表里配置了单价(与按模型视图同一口径,false 时显示「未配置价格」)
+    pub priced: bool,
 }
 
 /// 按供应商(provider_id)汇总的统计;name 来自 zcode 配置文件,未收录时等于 provider_id

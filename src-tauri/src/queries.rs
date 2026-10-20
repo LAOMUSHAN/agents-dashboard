@@ -1035,6 +1035,7 @@ pub fn get_provider_stats(
             avg_ttft_ms: r.avg_ttft_ms,
             cost,
             currency,
+            priced: !agg.unpriced.contains(&r.model_id),
         });
     }
     for models in models_by_provider.values_mut() {
