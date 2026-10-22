@@ -357,9 +357,13 @@ export interface LatencyStat {
   decodeTokensPerSec: number | null;
 }
 
-/** 活跃热力图单元格:dow 0=周日…6=周六,hour 0-23,本地时间 */
+/** 活跃热力图单元格:本地日期 + 小时 + 调用次数 */
 export interface HeatCell {
+  /** 本地日期 YYYY-MM-DD */
+  day: string;
+  /** 0=周日…6=周六 */
   dow: number;
+  /** 0-23,本地时间 */
   hour: number;
   calls: number;
 }

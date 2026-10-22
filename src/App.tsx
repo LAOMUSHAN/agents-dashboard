@@ -485,7 +485,13 @@ export default function App() {
                     <ModelTrendChart points={modelTrend} />
                     <ProviderTrendChart points={providerTrend} names={providerNames} />
                     <ContextComposition summary={summary} tools={tools} />
-                    <ActivityHeatmap cells={activity} />
+                    <ActivityHeatmap
+                      cells={activity}
+                      preset={rangeState.preset}
+                      range={range}
+                      customFrom={rangeState.customFrom}
+                      customTo={rangeState.customTo}
+                    />
                     <YearCalendar points={activityDaily} />
                     <AgentStatsPanel stats={agents} />
                     <WasteRankPanel projects={projects} models={models} providers={providers} />

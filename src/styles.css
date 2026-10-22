@@ -864,54 +864,7 @@ th.num {
 }
 
 /* ---------- activity heatmap ---------- */
-.heatmap {
-  display: grid;
-  grid-template-columns: auto repeat(24, 1fr);
-  gap: 3px;
-  align-items: center;
-  overflow-x: auto;
-  padding-bottom: 4px;
-}
-
-.heatmap-corner {
-  grid-column: 1;
-}
-
-.heatmap-col-label {
-  color: var(--muted);
-  font-size: 10px;
-  text-align: left;
-  min-width: 18px;
-}
-
-.heatmap-row-label {
-  color: var(--muted);
-  font-size: 10px;
-  padding-right: 6px;
-}
-
-.heatmap-cell {
-  aspect-ratio: 1;
-  max-width: 22px;
-  border-radius: 3px;
-  min-height: 12px;
-}
-
-.heatmap-scale {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.heatmap-scale i {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-}
+/* 网格、图例与浮层均由 ActivityHeatmap.tsx 用 Tailwind 令牌实现 */
 
 
 /* ---------- CDS motion utilities ---------- */
@@ -971,6 +924,29 @@ th.num {
     #0000000d calc(100% - var(--cds-scroll-fade-bottom) * 0.15),
     transparent
   );
+}
+
+/* 活跃时段：浮层弹入与单日柱状图升起 */
+@keyframes heat-tip-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.heat-tip-in {
+  animation: heat-tip-in 180ms var(--cds-ease-overshoot) both;
+}
+@keyframes heat-bar-in {
+  from { transform: scaleY(0.06); }
+  to { transform: scaleY(1); }
+}
+.heat-bar {
+  transform-origin: bottom;
+  animation: heat-bar-in 460ms var(--cds-ease-out-expo) both;
+}
+.heat-cell {
+  transition:
+    transform 150ms var(--cds-ease-out-expo),
+    background-color 150ms var(--cds-ease-out-expo),
+    box-shadow 150ms var(--cds-ease-out-expo);
 }
 
 @media (prefers-reduced-motion: reduce) {

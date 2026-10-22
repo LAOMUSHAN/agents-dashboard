@@ -1514,7 +1514,7 @@ pub fn get_latency_stats(conn: &Connection, range: &Range) -> rusqlite::Result<V
     Ok(result)
 }
 
-/// 活跃热力图:星期 × 小时的调用次数(本地时间,含所有状态——反映活跃度而非成功量)
+/// 活跃热力图:日期 × 小时的调用次数(本地时间,含所有状态——反映活跃度而非成功量)
 pub fn get_activity_heatmap(conn: &Connection, range: &Range) -> rusqlite::Result<Vec<HeatCell>> {
     let (conds, params) = range_conds("mu.started_at", range);
     let where_sql = if conds.is_empty() {
@@ -1525,19 +1525,21 @@ pub fn get_activity_heatmap(conn: &Connection, range: &Range) -> rusqlite::Resul
     let rows = query_rows(
         conn,
         &format!(
-            "SELECT CAST(strftime('%w', mu.started_at/1000, 'unixepoch', 'localtime') AS INTEGER) AS dow,
+            "SELECT date(mu.started_at/1000, 'unixepoch', 'localtime') AS day,
+                    CAST(strftime('%w', mu.started_at/1000, 'unixepoch', 'localtime') AS INTEGER) AS dow,
                     CAST(strftime('%H', mu.started_at/1000, 'unixepoch', 'localtime') AS INTEGER) AS hour,
                     COUNT(*) AS calls
              FROM model_usage mu {where_sql}
-             GROUP BY dow, hour
-             ORDER BY dow, hour"
+             GROUP BY day, hour
+             ORDER BY day, hour"
         ),
         &params,
         |r| {
             Ok(HeatCell {
-                dow: r.get(0)?,
-                hour: r.get(1)?,
-                calls: r.get(2)?,
+                day: r.get(0)?,
+                dow: r.get(1)?,
+                hour: r.get(2)?,
+                calls: r.get(3)?,
             })
         },
     )?;

@@ -448,11 +448,15 @@ pub struct LatencyStat {
     pub decode_tokens_per_sec: Option<f64>,
 }
 
-/// 活跃热力图单元格:dow 0=周日…6=周六,hour 0-23,本地时间
+/// 活跃热力图单元格:本地日期 + 小时 + 调用次数
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeatCell {
+    /// 本地日期 YYYY-MM-DD
+    pub day: String,
+    /// 0=周日…6=周六
     pub dow: i64,
+    /// 0-23,本地时间
     pub hour: i64,
     pub calls: i64,
 }
