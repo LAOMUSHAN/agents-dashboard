@@ -1,7 +1,7 @@
 # Agents Dashboard
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue.svg)](package.json)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB.svg)](https://v2.tauri.app/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#安装与运行)
 
@@ -11,7 +11,7 @@ Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你�
 
 ## 界面预览
 
-> 以下截图为本机真实数据渲染，数值会随时间变化。截图为 0.3.x–0.5.0；0.4.0 新增顶部「全部 / zcode / DSH」范围切换与行级来源徽章，0.4.3 活跃时段改为日期×小时热力图，0.4.4 加入逐日分布条与分步展开，0.4.5 活跃时段改为总 Token 口径，0.4.6 长区间支持按天/按小时切换并移除按星期，0.4.7 模型/供应商趋势的 Token 与费用改为堆叠柱状图，0.4.8 修正活跃时段按天/按小时口径，0.4.9 从按天切回按小时时加入左上到右下的对角显现，0.5.0 总览模块可在设置中拖动排序与显隐。
+> 以下截图为本机真实数据渲染，数值会随时间变化。截图为 0.3.x–0.5.1；0.4.0 新增顶部「全部 / zcode / DSH」范围切换与行级来源徽章，0.4.3 活跃时段改为日期×小时热力图，0.4.4 加入逐日分布条与分步展开，0.4.5 活跃时段改为总 Token 口径，0.4.6 长区间支持按天/按小时切换并移除按星期，0.4.7 模型/供应商趋势的 Token 与费用改为堆叠柱状图，0.4.8 修正活跃时段按天/按小时口径，0.4.9 从按天切回按小时时加入左上到右下的对角显现，0.5.0 总览模块可在设置中拖动排序与显隐，0.5.1 关闭 Tauri 原生拖放拦截以恢复 WebView2 内的 HTML5 拖动。
 
 ### 总览
 
