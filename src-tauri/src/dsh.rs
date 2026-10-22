@@ -12,6 +12,8 @@
 //! 解析口径：
 //! - v0/v4 同一会话两份并存时优先 v4（按目录去重，按会话 id 替换行）。
 //! - `input_tokens = inputTokens + cacheReadTokens`（DSH 的 input 不含缓存读）。
+//! - v4 的流式时间戳收在 `assistant/message.data.stream` 里（v0 才是独立的 chunk 事件）；
+//!   首 token 取首个增量，批量 chunk 的首成员时间就是 `time0`。
 //! - 没有 `assistant/message` 的 step 用 `llm/retry` + `turn/end` 合成 error 行。
 //! - 逐帧流式解压、逐行解析，不把整个解压文件读进内存。
 
@@ -25,7 +27,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// 索引库 schema 版本。DSH 数据只是缓存，版本不符时整库重建。
-const SCHEMA_VERSION: i64 = 4;
+/// v5：从 v4 的 `assistant/message.data.stream` 提取首 token 时间（此前只认 v0 的独立 chunk 事件，
+/// 导致 v4 会话的 TTFT/解码速度全空）。
+/// v6：批量 chunk 的首 token 取 `time0`（首个成员时间），不再错误地叠加 `dt[0]`。
+const SCHEMA_VERSION: i64 = 6;
 /// 增量刷新单次时间预算；超过就把剩余文件留给下一次刷新。
 const DEFAULT_BUDGET_MS: u64 = 250;
 
@@ -649,6 +654,40 @@ fn mtime_ms(meta: &fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
+/// 从 `assistant/message.data.stream` 提取首个 token 的时间戳。
+///
+/// v4 日志不再逐条写 `assistant/chunk`，而是把整段流式响应收进 assistant/message 的
+/// `stream`：`chunk` 条目带 `time`，批量条目（reasoning/text/tool-call-chunks）带
+/// `time0 + dt[]`。按 DSH 的 isTokenDelta 口径取第一个增量；批量条目的 `time0`
+/// 就是首个增量成员的时间（`dt` 是成员之间的间隔，不能加到首成员上）。整段没有
+/// 增量时回退到 block-start，至少给出首字节时间，好过空值。
+fn stream_first_token_time(stream: &[Value]) -> Option<i64> {
+    let mut fallback = None;
+    for item in stream {
+        match item.get("type").and_then(Value::as_str) {
+            Some("chunk") => {
+                let Some(chunk) = item.get("chunk") else { continue };
+                let ctype = chunk.get("type").and_then(Value::as_str).unwrap_or("");
+                let time = item.get("time").and_then(Value::as_i64);
+                if matches!(ctype, "text-delta" | "reasoning-delta" | "tool-call-delta") {
+                    if let Some(t) = time {
+                        return Some(t);
+                    }
+                } else if ctype == "block-start" && fallback.is_none() {
+                    fallback = time;
+                }
+            }
+            Some("text-chunks") | Some("reasoning-chunks") | Some("tool-call-chunks") => {
+                if let Some(t0) = item.get("time0").and_then(Value::as_i64) {
+                    return Some(t0);
+                }
+            }
+            _ => {}
+        }
+    }
+    fallback
+}
+
 /// 解析单个会话日志。流式逐帧解压 + 逐行；尾部未写完的帧只丢弃，不报错。
 fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
     let file = fs::File::open(path)
@@ -809,6 +848,13 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
                     if let Some(p) = src.get("provider").and_then(Value::as_str) {
                         s.provider = Some(p.to_string());
                         last_provider = Some(p.to_string());
+                    }
+                }
+                // v4：流式时间戳在 assistant/message.data.stream；v0 的独立 chunk 事件
+                // 仍走下面的 assistant/chunk / *-chunks 分支，这里取两者最早值。
+                if let Some(stream) = data.and_then(|d| d.get("stream")).and_then(Value::as_array) {
+                    if let Some(t) = stream_first_token_time(stream) {
+                        s.first_chunk = Some(s.first_chunk.map_or(t, |cur| cur.min(t)));
                     }
                 }
             }
@@ -1207,6 +1253,54 @@ mod tests {
             .unwrap();
         assert_eq!(stale_status, "completed");
         assert_eq!(stale_dur, None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// v4 把流式时间戳收在 assistant/message.data.stream：首 token = time0（dt 是成员间隔，
+    /// 不能加到首成员上），没有增量时回退 block-start。回归点是 v4 会话此前 TTFT/解码速度全空。
+    #[test]
+    fn parses_v4_stream_timing() {
+        let dir = temp_dir("v4-stream");
+        let sess = dir.join("sessions").join("proj").join("sess");
+        fs::create_dir_all(&sess).unwrap();
+
+        let lines = [
+            r#"{"type":"session","version":4,"id":"session-v4","createdAt":1000,"cwd":"C:\\proj"}"#,
+            r#"{"type":"step/start","time":1000,"data":{"turn":1,"step":1}}"#,
+            r#"{"type":"assistant/message","time":1500,"data":{"turn":1,"step":1,"message":{"source":{"provider":"p","model":"m"}},"usage":{"inputTokens":100,"outputTokens":20},"stream":[{"type":"chunk","time":1100,"chunk":{"type":"block-start","index":0,"blockType":"reasoning"}},{"type":"reasoning-chunks","time0":1100,"dt":[500,0],"texts":["a","b"]},{"type":"chunk","time":1500,"chunk":{"type":"finish","reason":{"kind":"stop"}}}]}}"#,
+            r#"{"type":"step/end","time":1500,"data":{"turn":1,"step":1}}"#,
+            r#"{"type":"step/start","time":1600,"data":{"turn":1,"step":2}}"#,
+            r#"{"type":"assistant/message","time":1800,"data":{"turn":1,"step":2,"message":{"source":{"provider":"p","model":"m"}},"usage":{"inputTokens":10,"outputTokens":5},"stream":[{"type":"chunk","time":1650,"chunk":{"type":"block-start","index":0,"blockType":"text"}},{"type":"chunk","time":1800,"chunk":{"type":"block-end","index":0}}]}}"#,
+            r#"{"type":"step/end","time":1800,"data":{"turn":1,"step":2}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        fs::write(
+            sess.join("session.v4.jsonl.zstd"),
+            zstd::stream::encode_all(lines.as_bytes(), 3).unwrap(),
+        )
+        .unwrap();
+
+        let mut indexer = DshIndexer::new(dir.join("sessions"), dir.join("index.sqlite"));
+        indexer.ensure_fresh(true).unwrap();
+        let conn = Connection::open(dir.join("index.sqlite")).unwrap();
+        let rows: Vec<(i64, i64, Option<i64>, Option<i64>)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT turn, step, time_to_first_token_ms, duration_ms
+                     FROM dsh_model_usage ORDER BY step",
+                )
+                .unwrap();
+            let it = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap();
+            it.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+        };
+        assert_eq!(
+            rows,
+            vec![(1, 1, Some(100), Some(500)), (1, 2, Some(50), Some(200))]
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

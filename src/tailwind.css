@@ -103,6 +103,10 @@
   --color-clay: var(--cds-clay);
   --color-clay-hover: var(--cds-clay-hover);
   --color-clay-soft: var(--cds-clay-soft);
+  --color-dsh: var(--cds-dsh);
+  --color-dsh-text: var(--cds-dsh-text);
+  --color-dsh-soft: var(--cds-dsh-soft);
+  --color-dsh-border: var(--cds-dsh-border);
   --color-text-primary: var(--cds-text-primary);
   --color-text-secondary: var(--cds-text-secondary);
   --color-text-muted: var(--cds-text-muted);

@@ -1,13 +1,14 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export type BadgeTone = "ok" | "err" | "warn" | "info" | "muted";
+export type BadgeTone = "ok" | "err" | "warn" | "info" | "dsh" | "muted";
 
 const TONES: Record<BadgeTone, string> = {
   ok: "bg-success/12 text-success border-success/25",
   err: "bg-danger/12 text-danger border-danger/25",
   warn: "bg-warn/14 text-warn border-warn/25",
   info: "bg-clay-soft text-clay border-clay/25",
+  dsh: "bg-dsh-soft text-dsh-text border-dsh-border",
   muted: "bg-muted text-muted-foreground border-transparent",
 };
 

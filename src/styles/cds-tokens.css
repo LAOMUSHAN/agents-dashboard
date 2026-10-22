@@ -80,6 +80,12 @@
   --cds-clay-light: #fbf3ef;
   --cds-clay-soft: rgba(217, 119, 87, 0.12);
 
+  /* DSH 数据源标识：色系 RGB(103, 158, 254)；浅色下文字取同色系深阶保证 11px 可读 */
+  --cds-dsh: #679efe;
+  --cds-dsh-text: #2f6fe0;
+  --cds-dsh-soft: rgba(103, 158, 254, 0.14);
+  --cds-dsh-border: rgba(103, 158, 254, 0.35);
+
   --cds-surface-0: var(--cds-gray-20);
   --cds-surface-1: var(--cds-gray-10);
   --cds-surface-2: var(--cds-gray-0);
@@ -187,6 +193,12 @@
   --cds-clay-hover: #e08264;
   --cds-clay-light: rgba(217, 119, 87, 0.15);
   --cds-clay-soft: rgba(217, 119, 87, 0.16);
+
+  /* DSH 数据源标识：深色底直接用 103,158,254 本体，保持同一蓝紫色系 */
+  --cds-dsh: #679efe;
+  --cds-dsh-text: #679efe;
+  --cds-dsh-soft: rgba(103, 158, 254, 0.20);
+  --cds-dsh-border: rgba(103, 158, 254, 0.45);
 
   --cds-alpha-0: hsla(0, 0%, 100%, 0);
   --cds-alpha-1: hsla(0, 0%, 100%, 0.05);

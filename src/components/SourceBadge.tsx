@@ -5,7 +5,7 @@ export function SourceBadge({ source, className }: { source: string; className?:
   const dsh = source === "dsh";
   return (
     <StatBadge
-      tone={dsh ? "info" : "muted"}
+      tone={dsh ? "dsh" : "muted"}
       className={className}
       title={dsh ? "来自 DSH 会话日志" : "来自 zcode 用量库"}
     >
