@@ -251,6 +251,7 @@ function HeatCellButton({
   base,
   levelClass,
   rowH,
+  delay = 0,
   pinned,
   onHover,
   onPin,
@@ -259,6 +260,7 @@ function HeatCellButton({
   base: TipBase;
   levelClass: string;
   rowH: number;
+  delay?: number;
   pinned: boolean;
   onHover: HoverFn;
   onPin: PinFn;
@@ -271,11 +273,11 @@ function HeatCellButton({
       aria-label={`${base.label} ${base.time}，${fmtTokens(base.tokens)} Token`}
       aria-pressed={pinned}
       className={cn(
-        "heat-cell relative w-full rounded-[3px] outline-none transition-transform duration-150 hover:z-10 hover:scale-[1.12] focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-clay/50",
+        "heat-cell heat-cell-in relative w-full rounded-[3px] outline-none transition-transform duration-150 hover:z-10 hover:scale-[1.12] focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-clay/50",
         levelClass,
         pinned && "ring-2 ring-clay/70",
       )}
-      style={{ height: rowH }}
+      style={{ height: rowH, animationDelay: `${delay}ms` }}
       onMouseEnter={(e) => onHover(e, base)}
       onMouseLeave={onLeave}
       onFocus={(e) => onHover(e, base)}
@@ -923,6 +925,7 @@ export function ActivityHeatmap({
                                     base={base}
                                     levelClass={LEVELS[level(tokens)]}
                                     rowH={rowH}
+                                    delay={(rowIndex + hour) * 10}
                                     pinned={pinned?.cellKey === base.cellKey}
                                     onHover={onHover}
                                     onPin={onPin}
