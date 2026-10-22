@@ -16,7 +16,7 @@ import { Segmented } from "./ui/segmented";
 import { cn } from "@/lib/utils";
 
 type Preset = "today" | "yesterday" | "7d" | "30d" | "all" | "custom";
-type Mode = "single" | "dates" | "hours";
+type Mode = "single" | "dates" | "bars";
 
 type TipBase = {
   cellKey: string;
@@ -47,8 +47,8 @@ const LEVELS = ["bg-muted/45", "bg-clay/30", "bg-clay/50", "bg-clay/75", "bg-cla
 const GRID_COLS = "84px repeat(24, minmax(0, 1fr)) 72px 54px";
 const DAY_MS = 86_400_000;
 const HOUR_VIEW_OPTIONS = [
-  { value: "day", label: "按天" },
   { value: "hour", label: "按小时" },
+  { value: "day", label: "按天" },
 ] as const;
 
 function startOfDay(d: Date): Date {
@@ -369,6 +369,74 @@ function HourBars({
   );
 }
 
+function DailyBars({
+  keys,
+  totals,
+  tip,
+  max,
+  pinned,
+  onHover,
+  onPin,
+  onLeave,
+}: {
+  keys: string[];
+  totals: Map<string, number>;
+  tip: (key: string, tokens: number) => TipBase;
+  max: number;
+  pinned: CellTip | null;
+  onHover: HoverFn;
+  onPin: PinFn;
+  onLeave: () => void;
+}) {
+  const step = keys.length > 40 ? 5 : keys.length > 20 ? 3 : 1;
+  return (
+    <div className="mt-1">
+      <div
+        className="relative flex h-[150px] items-end gap-[3px] border-b border-border/60 px-1"
+        role="group"
+        aria-label="每日总 Token"
+      >
+        {keys.map((key, i) => {
+          const tokens = totals.get(key) ?? 0;
+          const h = max > 0 ? Math.max(2, (tokens / max) * 132) : 2;
+          const base = tip(key, tokens);
+          return (
+            <button
+              key={key}
+              type="button"
+              data-heat-cell
+              aria-label={`${base.label} 全天，${fmtTokens(tokens)} Token`}
+              aria-pressed={pinned?.cellKey === base.cellKey}
+              className="group relative flex h-full flex-1 items-end justify-center outline-none focus-visible:z-10"
+              onMouseEnter={(e) => onHover(e, base, e.currentTarget.firstElementChild)}
+              onMouseLeave={onLeave}
+              onFocus={(e) => onHover(e, base, e.currentTarget.firstElementChild)}
+              onBlur={onLeave}
+              onClick={(e) => onPin(e, base, e.currentTarget.firstElementChild)}
+            >
+              <span
+                className={cn(
+                  "heat-bar w-full rounded-t-[3px] transition-[filter,background-color] duration-150 group-hover:brightness-110",
+                  tokens === 0 ? "bg-muted/45" : "bg-clay",
+                  pinned?.cellKey === base.cellKey && "ring-2 ring-clay/70",
+                )}
+                style={{ height: `${h}px`, animationDelay: `${i * 8}ms` }}
+              />
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-1 flex gap-[3px] px-1 text-center text-[9px] tabular-nums text-muted-foreground">
+        {keys.map((key, i) => (
+          <span key={key} className="min-w-0 flex-1 truncate">
+            {i % step === 0 || i === keys.length - 1 ? fmtDay(key) : ""}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Empty({ label }: { label: string }) {
   return (
     <div className="flex flex-col items-center gap-2 px-2 py-10 text-center">
@@ -398,20 +466,20 @@ export function ActivityHeatmap({
   const todayKey = dayKey(today);
   const yesterdayKey = dayKey(addDays(today, -1));
   const cellDays = useMemo(() => [...new Set(cells.map((c) => c.day))].sort(), [cells]);
-  const [hourView, setHourView] = useState<"day" | "hour">("day");
+  const [hourView, setHourView] = useState<"day" | "hour">("hour");
   const [visibleDays, setVisibleDays] = useState(7);
 
   const win = useMemo<{ mode: Mode; keys: string[]; label: string }>(() => {
     const plain = (mode: Mode, keys: string[], label: string) => ({ mode, keys, label });
-    const dayView = (from: string, to: string, span: number, allowHour: boolean) => {
-      const mode: Mode = allowHour && hourView === "hour" ? "hours" : "dates";
+    const dayView = (from: string, to: string, span: number, allowToggle: boolean) => {
+      const bars = allowToggle && hourView === "day";
+      const mode: Mode = bars ? "bars" : "dates";
       return {
         mode,
         keys: dayKeys(from, to),
-        label:
-          mode === "hours"
-            ? `按小时 · ${fmtDay(from)} – ${fmtDay(to)} · ${span} 天`
-            : `${fmtDay(from)} – ${fmtDay(to)} · ${span} 天`,
+        label: allowToggle
+          ? `${bars ? "按天" : "按小时"} · ${fmtDay(from)} – ${fmtDay(to)} · ${span} 天`
+          : `${fmtDay(from)} – ${fmtDay(to)} · ${span} 天`,
       };
     };
 
@@ -463,29 +531,35 @@ export function ActivityHeatmap({
     const dayMap = new Map<string, number[]>();
     const active = new Set<string>();
 
-    if (win.mode === "hours") {
+    if (win.mode === "bars") {
       const inRange = new Set(win.keys);
-      const hourTotals = Array<number>(24).fill(0);
+      const dayTotals = new Map<string, number>();
+      for (const key of win.keys) dayTotals.set(key, 0);
       for (const c of cells) {
-        if (!inRange.has(c.day) || c.hour < 0 || c.hour > 23) continue;
-        hourTotals[c.hour] += c.tokens;
-        if (c.tokens > 0) active.add(c.day);
+        if (!inRange.has(c.day)) continue;
+        dayTotals.set(c.day, (dayTotals.get(c.day) ?? 0) + c.tokens);
       }
-      const total = hourTotals.reduce((a, b) => a + b, 0);
-      const maxHour = Math.max(...hourTotals, 0);
-      const peakHour = maxHour > 0 ? hourTotals.indexOf(maxHour) : -1;
-      const activeHours = hourTotals.filter((v) => v > 0).length;
+      const total = [...dayTotals.values()].reduce((a, b) => a + b, 0);
+      let bestKey = "";
+      let best = 0;
+      for (const [key, v] of dayTotals) {
+        if (v > best) {
+          best = v;
+          bestKey = key;
+        }
+      }
+      const mostActive = best > 0 ? { label: `${fmtDay(bestKey)} ${weekday(bestKey)}`, tokens: best } : null;
       return {
         dayMap,
-        hourTotals,
+        hourTotals: [] as number[],
         total,
-        maxCell: maxHour,
-        maxHour,
-        peakHour,
-        activeHours,
-        activeDays: active.size,
-        dayTotals: new Map<string, number>(),
-        mostActive: null,
+        maxCell: 0,
+        maxHour: 0,
+        peakHour: -1,
+        activeHours: 0,
+        activeDays: [...dayTotals.values()].filter((v) => v > 0).length,
+        dayTotals,
+        mostActive,
       };
     }
 
@@ -540,7 +614,7 @@ export function ActivityHeatmap({
   // Token 条沿用 tokens 条的页面级标尺：取整个所选范围的最大日 Token，
   // 展开/收起时同一天的条长不跳变。
   const barMax = useMemo(() => {
-    if (win.mode === "hours") return 0;
+    if (win.mode === "bars") return 0;
     const inRange = new Set(win.keys);
     const totals = new Map<string, number>();
     for (const c of cells) {
@@ -556,11 +630,11 @@ export function ActivityHeatmap({
   const [hover, setHover] = useState<CellTip | null>(null);
   const [pinned, setPinned] = useState<CellTip | null>(null);
 
-  // 切换范围后旧的锚点已失效，收起浮层并回到默认的按天视图
+  // 切换范围后旧的锚点已失效，收起浮层并回到默认的按小时视图
   useEffect(() => {
     setHover(null);
     setPinned(null);
-    setHourView("day");
+    setHourView("hour");
     setVisibleDays(7);
   }, [preset, range.from, range.to, customFrom, customTo]);
 
@@ -643,10 +717,10 @@ export function ActivityHeatmap({
     };
   };
 
-  const hourTip = (hour: number, tokens: number): TipBase => ({
-    cellKey: `hour|${hour}`,
-    label: "区间按小时",
-    time: hourRange(hour),
+  const barTip = (key: string, tokens: number): TipBase => ({
+    cellKey: `daybar|${key}`,
+    label: `${fmtLongDay(key)} ${weekday(key)}`,
+    time: "全天",
     tokens,
     share: agg.total > 0 ? tokens / agg.total : 0,
     shareRange: agg.total > 0 ? tokens / agg.total : 0,
@@ -715,9 +789,15 @@ export function ActivityHeatmap({
               )}
               {win.mode === "single" ? (
                 <Metric label="活跃小时" value={`${agg.activeHours} 小时`} />
-              ) : win.mode === "hours" ? (
+              ) : win.mode === "bars" ? (
                 <>
-                  <Metric label="活跃小时" value={`${agg.activeHours} 小时`} />
+                  {agg.mostActive && (
+                    <Metric
+                      label="峰值日"
+                      value={agg.mostActive.label}
+                      hint={`${fmtTokens(agg.mostActive.tokens)} Token`}
+                    />
+                  )}
                   <Metric label="活跃日" value={`${agg.activeDays} 天`} />
                 </>
               ) : (
@@ -778,15 +858,13 @@ export function ActivityHeatmap({
                 onPin={onPin}
                 onLeave={() => setHover(null)}
               />
-            ) : win.mode === "hours" ? (
-              <HourBars
-                values={agg.hourTotals}
-                tip={hourTip}
-                ariaLabel="区间按小时 Token 分布"
-                max={agg.maxHour}
-                peakHour={agg.peakHour}
+            ) : win.mode === "bars" ? (
+              <DailyBars
+                keys={win.keys}
+                totals={agg.dayTotals}
+                tip={barTip}
+                max={Math.max(...agg.dayTotals.values(), 0)}
                 pinned={pinned}
-                levelOf={(v) => LEVELS[level(v)]}
                 onHover={onHover}
                 onPin={onPin}
                 onLeave={() => setHover(null)}
@@ -910,9 +988,9 @@ export function ActivityHeatmap({
 
             <div className="mt-2 flex items-center justify-between gap-3 px-1">
               <span className="text-[10px] text-muted-foreground">
-                {win.mode === "hours" ? "按小时聚合" : win.mode === "single" ? "按小时" : "按天排列"}
+                {win.mode === "bars" ? "按天 · 每日总 Token" : win.mode === "single" ? "按小时" : "按小时 · 日期×小时"}
               </span>
-              <Legend />
+              {win.mode !== "bars" && <Legend />}
             </div>
           </>
         )}
