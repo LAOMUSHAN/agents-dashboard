@@ -2,6 +2,7 @@ import type { AgentStat } from "../../shared/types";
 import { fmtNumber, fmtSeconds, fmtSpeed, fmtTokens } from "../format";
 import { Panel } from "./ui/panel";
 import { StatBadge } from "./ui/stat-badge";
+import { SourceBadge } from "./SourceBadge";
 
 const TH_NUM = "px-2 py-2 text-right text-[11px] font-medium text-muted-foreground whitespace-nowrap";
 const TD_NUM = "px-2 py-1.5 text-right text-[13px] tabular-nums whitespace-nowrap";
@@ -39,7 +40,7 @@ export function AgentStatsPanel({ stats }: { stats: AgentStat[] }) {
           </thead>
           <tbody>
             {stats.map((a) => (
-              <tr key={a.agent ?? "__none__"} className="border-b border-border/60 transition-colors last:border-0 hover:bg-accent/50">
+              <tr key={`${a.source}:${a.agent ?? "__none__"}`} className="border-b border-border/60 transition-colors last:border-0 hover:bg-accent/50">
                 <td className="relative px-2 py-1.5">
                   <div
                     aria-hidden
@@ -49,6 +50,7 @@ export function AgentStatsPanel({ stats }: { stats: AgentStat[] }) {
                   <span className={"relative font-mono text-xs " + (isMain(a.agent) ? "font-semibold" : "")}>
                     {agentLabel(a.agent)}
                   </span>
+                  <SourceBadge source={a.source} className="relative ml-1.5" />
                   {isMain(a.agent) && <StatBadge tone="info" className="relative ml-1.5">主</StatBadge>}
                 </td>
                 <td className={TD_NUM}>{fmtNumber(a.requests)}</td>

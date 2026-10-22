@@ -11,10 +11,13 @@ import type {
   ProjectStat,
   ProviderStat,
   ProviderTrendPoint,
+  SourceFilter,
+  SourceStatus,
   Summary,
   ToolStat,
   TrendPoint,
 } from "../shared/types";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { fmtNumber, setUsdCnyRate } from "./format";
 import { cn } from "@/lib/utils";
@@ -32,6 +35,7 @@ import { ProviderPanel } from "./components/ProviderPanel";
 import { ProviderTable } from "./components/ProviderTable";
 import { ProviderTrendChart } from "./components/ProviderTrendChart";
 import { RequestLog } from "./components/RequestLog";
+import { SourceScope } from "./components/SourceScope";
 import { SummaryCards } from "./components/SummaryCards";
 import { TitleBar } from "./components/TitleBar";
 import { ToolStatsPanel } from "./components/ToolStatsPanel";
@@ -73,6 +77,14 @@ function getRefreshSec(): number {
   return REFRESH_OPTIONS.includes(v) ? v : 5;
 }
 
+// 数据源范围：全部 / zcode / DSH；落盘 ui-prefs.json，localStorage 只作即时缓存
+const SOURCE_KEY = "sourceScope";
+
+function getInitialSource(): SourceFilter {
+  const v = localStorage.getItem(SOURCE_KEY);
+  return v === "zcode" || v === "dsh" ? v : "all";
+}
+
 // 内容分区:面板较多,按主题拆成标签页避免整页无限滚动
 const TABS = [
   { value: "overview", label: "总览", icon: ChartNoAxesColumn },
@@ -106,11 +118,30 @@ export default function App() {
   const [models, setModels] = useState<ModelStat[]>([]);
   const [projects, setProjects] = useState<ProjectStat[]>([]);
   const [providers, setProviders] = useState<ProviderStat[]>([]);
-  // 趋势图图例用展示名,映射关系直接取自供应商表格的数据
-  const providerNames = useMemo(
-    () => Object.fromEntries(providers.map((p) => [p.providerId, p.name])),
-    [providers],
-  );
+  // 趋势图图例用展示名；同名供应商（同一中转被两个源使用）追加来源后缀
+  const providerNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const p of providers) counts.set(p.name, (counts.get(p.name) ?? 0) + 1);
+    return Object.fromEntries(
+      providers.map((p) => [
+        p.providerId,
+        (counts.get(p.name) ?? 0) > 1
+          ? `${p.name} · ${p.source === "dsh" ? "DSH" : "zcode"}`
+          : p.name,
+      ]),
+    );
+  }, [providers]);
+  // 来源构成（请求/tokens）：模型行已按 (source, model) 拆分，直接汇总即可
+  const sourceTotals = useMemo(() => {
+    const map = new Map<string, { requests: number; tokens: number }>();
+    for (const m of models) {
+      const cur = map.get(m.source) ?? { requests: 0, tokens: 0 };
+      cur.requests += m.requests;
+      cur.tokens += m.inputTokens + m.outputTokens;
+      map.set(m.source, cur);
+    }
+    return [...map.entries()].map(([id, v]) => ({ id, ...v }));
+  }, [models]);
   const [tools, setTools] = useState<ToolStat[]>([]);
   const [agents, setAgents] = useState<AgentStat[]>([]);
   const [errors, setErrors] = useState<ErrorStats | null>(null);
@@ -120,6 +151,11 @@ export default function App() {
   const [monthlyTrend, setMonthlyTrend] = useState<MonthPoint[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
   const [refreshSec, setRefreshSecState] = useState<number>(getRefreshSec);
+  const [source, setSource] = useState<SourceFilter>(getInitialSource);
+  const [sources, setSources] = useState<SourceStatus[]>([]);
+  const [capabilities, setCapabilities] = useState<string[]>([]);
+  // 隐藏到托盘时暂停刷新与索引；唤回时补一次
+  const [visible, setVisible] = useState(true);
   const [themeMode, setThemeModeState] = useState<ThemeMode>(getThemeMode);
   const [tab, setTab] = useState<Tab>(getInitialTab);
   const [navCollapsed, setNavCollapsed] = useState<boolean>(getInitialNavCollapsed);
@@ -129,6 +165,8 @@ export default function App() {
   // 后端查询失败时把原因留在界面上：以前只 console.error，整页会停在空数据，
   // 看起来像「应用没数据」而不是「查询出错」
   const [loadError, setLoadError] = useState<string | null>(null);
+  // ui-prefs.json 是整文件写入：保存前先合并已有字段，避免两个设置互相覆盖
+  const prefsRef = useRef<Record<string, unknown>>({});
   const themeOpt = THEME_OPTIONS.find((o) => o.value === themeMode);
 
   const switchTab = (t: Tab) => {
@@ -158,10 +196,21 @@ export default function App() {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  const savePrefs = (patch: Record<string, unknown>) => {
+    prefsRef.current = { ...prefsRef.current, ...patch };
+    api.saveUiPrefs(prefsRef.current).catch(() => undefined);
+  };
+
   const setRefreshSec = (sec: number) => {
     localStorage.setItem(REFRESH_KEY, String(sec));
     setRefreshSecState(sec);
-    api.saveUiPrefs({ refreshSec: sec }).catch(() => undefined);
+    savePrefs({ refreshSec: sec });
+  };
+
+  const setSourceScope = (v: SourceFilter) => {
+    setSource(v);
+    localStorage.setItem(SOURCE_KEY, v);
+    savePrefs({ sourceScope: v });
   };
 
   // 刷新间隔以配置文件为准（localStorage 只作即时缓存），
@@ -170,13 +219,39 @@ export default function App() {
     api
       .getUiPrefs()
       .then((prefs) => {
+        prefsRef.current = prefs;
         const v = Number(prefs.refreshSec);
         if (REFRESH_OPTIONS.includes(v)) {
           localStorage.setItem(REFRESH_KEY, String(v));
           setRefreshSecState(v);
         }
+        const s = prefs.sourceScope;
+        if (s === "all" || s === "zcode" || s === "dsh") {
+          localStorage.setItem(SOURCE_KEY, s);
+          setSource(s);
+        }
       })
       .catch(() => undefined);
+  }, []);
+
+  // 托盘隐藏/唤回：隐藏时停掉 5 秒刷新与 DSH 索引，唤回立即补一次。
+  // App 退出后进程结束，不会留下任何后台活动。
+  useEffect(() => {
+    let unHide: UnlistenFn | undefined;
+    let unShow: UnlistenFn | undefined;
+    listen("window-hidden", () => setVisible(false))
+      .then((u) => (unHide = u))
+      .catch(() => undefined);
+    listen("window-shown", () => {
+      setVisible(true);
+      setReloadKey((k) => k + 1);
+    })
+      .then((u) => (unShow = u))
+      .catch(() => undefined);
+    return () => {
+      unHide?.();
+      unShow?.();
+    };
   }, []);
 
   // 汇率:金额统一以美元存储,各费用单元格再按该行价格表的币种换算(改完单价后由 reloadKey 重新拉取)
@@ -187,27 +262,30 @@ export default function App() {
       .catch(() => undefined);
   }, [reloadKey]);
 
-  // 定时刷新:到点触发一次重新加载
+  // 定时刷新:到点触发一次重新加载；隐藏到托盘时停表（唤回由 window-shown 补一次）
   useEffect(() => {
-    if (!refreshSec) return;
+    if (!refreshSec || !visible) return;
     const id = window.setInterval(() => setReloadKey((k) => k + 1), refreshSec * 1000);
     return () => window.clearInterval(id);
-  }, [refreshSec]);
+  }, [refreshSec, visible]);
 
   const setTheme = (mode: ThemeMode) => {
     setThemeMode(mode);
     setThemeModeState(mode);
   };
 
-  // 切范围时保留旧数据，避免 30 天查询期间整页空白；
+  // 切范围/切数据源时保留旧数据，避免 30 天查询期间整页空白；
   // 刷新 tick 撞上进行中的查询直接跳过，避免请求在阻塞线程池里排队。
   const lastRangeRef = useRef(range);
+  const lastSourceRef = useRef(source);
   const busyRef = useRef(false);
   const reqSeq = useRef(0);
   useEffect(() => {
     const rangeChanged = lastRangeRef.current !== range;
+    const sourceChanged = lastSourceRef.current !== source;
     lastRangeRef.current = range;
-    if (!rangeChanged && busyRef.current) return;
+    lastSourceRef.current = source;
+    if (!rangeChanged && !sourceChanged && busyRef.current) return;
 
     let alive = true;
     const seq = ++reqSeq.current;
@@ -216,7 +294,7 @@ export default function App() {
         busyRef.current = true;
         setLoading(true);
         api
-          .dashboard(range)
+          .dashboard(range, source)
           .then((d) => {
             if (!alive || seq !== reqSeq.current) return;
             setSummary(d.summary);
@@ -233,6 +311,8 @@ export default function App() {
             setActivity(d.activity);
             setActivityDaily(d.activityDaily);
             setMonthlyTrend(d.monthlyTrend);
+            setSources(d.sources);
+            setCapabilities(d.capabilities);
             setLoadError(null);
           })
           .catch((e) => {
@@ -247,14 +327,14 @@ export default function App() {
             if (alive) setLoading(false);
           });
       },
-      rangeChanged ? 120 : 0,
+      rangeChanged || sourceChanged ? 120 : 0,
     );
 
     return () => {
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [range, reloadKey]);
+  }, [range, reloadKey, source]);
 
   const navItem = (t: (typeof TABS)[number]) => {
     const active = tab === t.value;
@@ -302,6 +382,9 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       <TitleBar title={currentTab.label} hint={TAB_HINTS[tab]} busy={loading}>
+        {tab !== "settings" && (
+          <SourceScope value={source} onChange={setSourceScope} sources={sources} />
+        )}
         <DateRangePicker {...rangeState} />
         <Dropdown
           value={refreshSec}
@@ -367,10 +450,29 @@ export default function App() {
                 <span className="min-w-0 break-words text-danger/90">{loadError}</span>
               </div>
             )}
+            {sources
+              .filter((s) => !s.available)
+              .map((s) => (
+                <div
+                  key={s.id}
+                  role="status"
+                  className="flex items-start gap-2 rounded-panel border border-warn/25 bg-warn/8 px-4 py-3 text-[12px] leading-relaxed text-warn"
+                >
+                  <span className="font-semibold">{s.label} 不可用</span>
+                  <span className="min-w-0 break-words text-warn/90">
+                    {s.error ?? "该数据源当前没有可用数据；全部范围只显示另一个源。"}
+                  </span>
+                </div>
+              ))}
             {tab === "overview" && (
               <>
-                <InsightCard summary={summary} models={models} providers={providers} />
-                <SummaryCards summary={summary} trend={trend} />
+                <InsightCard
+                  summary={summary}
+                  models={models}
+                  providers={providers}
+                  sourceTotals={sourceTotals}
+                />
+                <SummaryCards summary={summary} trend={trend} capabilities={capabilities} source={source} />
                 <TrendChart points={trend} monthly={monthlyTrend} />
                 <button
                   className="mx-auto inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -401,14 +503,21 @@ export default function App() {
                   <ErrorPanel stats={errors} />
                   <LatencyPanel stats={latency} />
                 </div>
-                <ToolStatsPanel stats={tools} />
+                <ToolStatsPanel
+                  stats={tools}
+                  partialCancelled={capabilities.includes("toolCancelled")}
+                />
               </>
             )}
 
-            {tab === "log" && <RequestLog range={range} />}
+            {tab === "log" && <RequestLog range={range} source={source} />}
 
             {tab === "settings" && (
               <>
+                <div className="rounded-panel border border-border bg-card px-4 py-3 text-[12px] leading-relaxed text-muted-foreground">
+                  DSH 的供应商与模型在 DSH 设置中管理，本面板只读取用量数据、不写回 DSH 配置；
+                  下面的供应商页仅针对 zcode，模型单价由两个源共享。
+                </div>
                 <ProviderPanel />
                 <PricingPanel range={range} models={models} onSaved={() => setReloadKey((k) => k + 1)} />
               </>

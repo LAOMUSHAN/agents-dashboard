@@ -107,6 +107,8 @@ export interface ProviderTrendPoint {
 }
 
 export interface ModelStat {
+  /** "zcode" / "dsh"；全部范围下同一模型可能两行（速率/分位数不混算） */
+  source: string;
   modelId: string;
   requests: number;
   sessions: number;
@@ -178,6 +180,7 @@ export interface ProviderModelStat {
 
 /** 按供应商(provider_id)汇总的统计;name 来自 zcode 配置文件,未收录时等于 providerId */
 export interface ProviderStat {
+  source: string;
   providerId: string;
   name: string;
   requests: number;
@@ -205,6 +208,7 @@ export interface ProviderStat {
 }
 
 export interface RequestRow {
+  source: string;
   /** model_usage.id 在 zcode 库里是 TEXT(如 usage_model_xxx) */
   id: string;
   startedAt: number;
@@ -232,6 +236,7 @@ export interface RequestRow {
 
 /** 请求日志的一个分组 = 一个根会话(主会话)及其子代理会话的全部请求 */
 export interface RequestGroup {
+  source: string;
   sessionId: string;
   title: string | null;
   project: string;
@@ -279,10 +284,13 @@ export interface DashboardPayload {
   monthlyTrend: MonthPoint[];
   /** 各数据源状态；某源不可用时前端置灰并提示 */
   sources: SourceStatus[];
+  /** 聚合范围下不完整的指标（如 DSH 不提供 reasoning tokens） */
+  capabilities: string[];
 }
 
 /** 单个工具的调用统计(tool_usage 表) */
 export interface ToolStat {
+  source: string;
   toolName: string;
   calls: number;
   errors: number;
@@ -293,6 +301,7 @@ export interface ToolStat {
 
 /** 按代理(agent 列)汇总的统计;agent 为 null 表示该行未记录代理 */
 export interface AgentStat {
+  source: string;
   agent: string | null;
   requests: number;
   sessions: number;
@@ -334,6 +343,7 @@ export interface ErrorStats {
 
 /** 单个模型的延迟指标(epoch ms) */
 export interface LatencyStat {
+  source: string;
   modelId: string;
   requests: number;
   avgMs: number | null;

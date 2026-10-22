@@ -1,6 +1,7 @@
 import type { LatencyStat } from "../../shared/types";
 import { fmtDuration, fmtNumber, fmtSpeed } from "../format";
 import { Panel } from "./ui/panel";
+import { SourceBadge } from "./SourceBadge";
 
 /**
  * 模型延迟：每个模型一张横向卡片，指标用自适应网格排布。
@@ -26,10 +27,13 @@ export function LatencyPanel({ stats }: { stats: LatencyStat[] }) {
               ["解码速度", fmtSpeed(m.decodeTokensPerSec)],
             ];
             return (
-              <div key={m.modelId} className="rounded-lg bg-accent/30 px-3 py-2.5">
+              <div key={`${m.source}:${m.modelId}`} className="rounded-lg bg-accent/30 px-3 py-2.5">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="min-w-0 truncate font-mono text-[11px]" title={m.modelId}>
-                    {m.modelId}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="min-w-0 truncate font-mono text-[11px]" title={m.modelId}>
+                      {m.modelId}
+                    </span>
+                    <SourceBadge source={m.source} className="shrink-0" />
                   </span>
                   <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
                     {fmtNumber(m.requests)} 次请求

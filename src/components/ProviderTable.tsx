@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { Panel } from "./ui/panel";
 import { Segmented } from "./ui/segmented";
 import { StatBadge } from "./ui/stat-badge";
+import { SourceBadge } from "./SourceBadge";
 import { HitRatePill, MiniBar, StackBar } from "./ui/data-viz";
 import { cn } from "@/lib/utils";
 
@@ -25,6 +26,8 @@ const HEAD_LABEL: Record<Dim, string> = {
 type Row = {
   key: string;
   label: string;
+  /** 来源徽章：zcode / dsh；按项目聚合时为 undefined（跨源合并） */
+  source?: string;
   title?: string;
   requests: number;
   sessions: number;
@@ -87,6 +90,7 @@ export function ProviderTable({
       return stats.map((p) => ({
         key: p.providerId,
         label: p.name,
+        source: p.source,
         title: p.providerId,
         requests: p.requests,
         sessions: p.sessions,
@@ -102,6 +106,7 @@ export function ProviderTable({
         children: p.models.map((m) => ({
           key: `${p.providerId}/${m.modelId}`,
           label: m.modelId,
+          source: p.source,
           requests: m.requests,
           sessions: m.sessions,
           cacheRead: m.cacheReadTokens,
@@ -119,8 +124,9 @@ export function ProviderTable({
     }
     if (dim === "model") {
       return models.map((m) => ({
-        key: m.modelId,
+        key: `${m.source}:${m.modelId}`,
         label: m.modelId,
+        source: m.source,
         requests: m.requests,
         sessions: m.sessions,
         cacheRead: m.cacheReadTokens,
@@ -231,6 +237,7 @@ export function ProviderTable({
                         <span className={cn("truncate font-medium", dim !== "project" && "font-mono text-[11.5px]")}>
                           {r.label}
                         </span>
+                        {r.source && <SourceBadge source={r.source} className="shrink-0" />}
                         {r.children && r.children.length > 0 && (
                           <span className="shrink-0 rounded-full bg-accent px-1.5 py-px text-[10px] text-muted-foreground tabular-nums">
                             {r.children.length}

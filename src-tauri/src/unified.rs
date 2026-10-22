@@ -19,7 +19,6 @@ const MODEL_COLUMNS: &str = "source, id, session_id, model_id, provider_id, agen
      started_at, duration_ms, time_to_first_token_ms, input_tokens, output_tokens, \
      reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
      retry_count, cancelled_by_user, context_exceeded, error_type, error_code, error_message";
-const SESSION_COLUMNS: &str = "source, id, parent_id, directory, title, task_type";
 const TOOL_COLUMNS: &str = "source, tool_name, status, started_at, duration_ms";
 
 const ZC_MODEL: &str = "SELECT 'zcode', 'zc:' || id, 'zc:' || session_id, model_id, \
@@ -33,8 +32,12 @@ const DSH_MODEL: &str = "SELECT 'dsh', 'dsh:' || id, 'dsh:' || session_id, model
      cache_creation_input_tokens, retry_count, cancelled_by_user, context_exceeded, \
      error_type, error_code, error_message FROM dsh_model_usage";
 
-const ZC_SESSION: &str = "SELECT 'zcode', 'zc:' || id, 'zc:' || parent_id, directory, title, task_type FROM zc.session";
-const DSH_SESSION: &str = "SELECT 'dsh', 'dsh:' || id, 'dsh:' || parent_id, directory, title, task_type FROM dsh_session";
+// session 用 TEMP TABLE 而不是 VIEW：带命名空间前缀的 id 必须是真实列 + 索引，
+/// 否则 model_usage 与 session 的 join 用不上索引，7 万行会退化成几十秒。
+const ZC_SESSION_INSERT: &str = "INSERT INTO session(source,id,parent_id,directory,title,task_type)
+     SELECT 'zcode', 'zc:' || id, 'zc:' || parent_id, directory, title, task_type FROM zc.session";
+const DSH_SESSION_INSERT: &str = "INSERT INTO session(source,id,parent_id,directory,title,task_type)
+     SELECT 'dsh', 'dsh:' || id, 'dsh:' || parent_id, directory, title, task_type FROM dsh_session";
 
 const ZC_TOOL: &str = "SELECT 'zcode', tool_name, status, started_at, duration_ms FROM zc.tool_usage";
 const DSH_TOOL: &str = "SELECT 'dsh', tool_name, status, started_at, duration_ms FROM dsh_tool_usage";
@@ -68,18 +71,35 @@ pub fn open_query(
     })?;
     attach_zcode(&conn, zcode_path)?;
 
-    let (model, session, tool) = match filter {
+    // session 物化成临时表（约 3 千行）：命名空间 id 作为真实主键，join 才走索引。
+    // 每个查询连接各建一份，代价是毫秒级；比 7 万行 × 3 千行的嵌套循环便宜几个数量级。
+    conn.execute_batch(
+        "CREATE TEMP TABLE session(
+            source TEXT, id TEXT PRIMARY KEY, parent_id TEXT,
+            directory TEXT, title TEXT, task_type TEXT
+         );
+         CREATE INDEX idx_session_parent ON session(parent_id);",
+    )
+    .map_err(|e| AppError::Unavailable(format!("创建会话查询面失败: {e}")))?;
+    match filter {
+        SourceFilter::All => {
+            conn.execute_batch(&format!("{ZC_SESSION_INSERT}; {DSH_SESSION_INSERT};"))
+        }
+        SourceFilter::Zcode => conn.execute_batch(ZC_SESSION_INSERT),
+        SourceFilter::Dsh => conn.execute_batch(DSH_SESSION_INSERT),
+    }
+    .map_err(|e| AppError::Unavailable(format!("填充会话查询面失败: {e}")))?;
+
+    let (model, tool) = match filter {
         SourceFilter::All => (
             format!("{ZC_MODEL} UNION ALL {DSH_MODEL}"),
-            format!("{ZC_SESSION} UNION ALL {DSH_SESSION}"),
             format!("{ZC_TOOL} UNION ALL {DSH_TOOL}"),
         ),
-        SourceFilter::Zcode => (ZC_MODEL.to_string(), ZC_SESSION.to_string(), ZC_TOOL.to_string()),
-        SourceFilter::Dsh => (DSH_MODEL.to_string(), DSH_SESSION.to_string(), DSH_TOOL.to_string()),
+        SourceFilter::Zcode => (ZC_MODEL.to_string(), ZC_TOOL.to_string()),
+        SourceFilter::Dsh => (DSH_MODEL.to_string(), DSH_TOOL.to_string()),
     };
     conn.execute_batch(&format!(
         "CREATE TEMP VIEW model_usage({MODEL_COLUMNS}) AS {model};
-         CREATE TEMP VIEW session({SESSION_COLUMNS}) AS {session};
          CREATE TEMP VIEW tool_usage({TOOL_COLUMNS}) AS {tool};"
     ))
     .map_err(|e| AppError::Unavailable(format!("创建统一查询视图失败: {e}")))?;

@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { RequestGroup, RequestRow } from "../../shared/types";
+import type { RequestGroup, RequestRow, SourceFilter } from "../../shared/types";
 import { api, type Range } from "../api";
 import {
   fmtCostIn,
@@ -13,6 +13,7 @@ import {
 } from "../format";
 import { ChevronDown, ChevronRight, ScrollText } from "lucide-react";
 import { Panel } from "./ui/panel";
+import { SourceBadge } from "./SourceBadge";
 import { StatusDot, type StatusKind } from "./ui/status-dot";
 import { HitRatePill, StackBar, Waterfall } from "./ui/data-viz";
 import { cn } from "@/lib/utils";
@@ -136,7 +137,7 @@ function groupStats(requests: RequestRow[]) {
   };
 }
 
-export function RequestLog({ range }: { range: Range }) {
+export function RequestLog({ range, source }: { range: Range; source: SourceFilter }) {
   const [groups, setGroups] = useState<RequestGroup[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -154,7 +155,7 @@ export function RequestLog({ range }: { range: Range }) {
     loadingRef.current = true;
     setLoading(true);
     api
-      .requests(range, p, PAGE_SIZE)
+      .requests(range, p, PAGE_SIZE, source)
       .then(
         (d) => {
           if (my !== seq.current) return;
@@ -182,7 +183,7 @@ export function RequestLog({ range }: { range: Range }) {
     setError(null);
     load(1, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range]);
+  }, [range, source]);
 
   // 追加下一页
   useEffect(() => {
@@ -457,6 +458,7 @@ export function RequestLog({ range }: { range: Range }) {
                         >
                           {g.title ?? "(无标题会话)"}
                         </span>
+                        <SourceBadge source={g.source} className="shrink-0" />
                         <span className="shrink-0 rounded-full bg-accent px-1.5 py-px text-[10px] text-muted-foreground tabular-nums">
                           {fmtNumber(g.requests.length)}
                         </span>

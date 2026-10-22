@@ -14,10 +14,11 @@ use serde::Serialize;
 use sources::{SourceFilter, SourceStatus};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// 进程内共享状态；命令与后台任务都拿 Arc<Inner>，避免跨线程移动 MutexGuard。
 pub struct Inner {
@@ -27,6 +28,8 @@ pub struct Inner {
     index_path: PathBuf,
     /// DSH 索引器；Mutex 保证同一时刻只有一个刷新在跑
     dsh: Mutex<dsh::DshIndexer>,
+    /// 主窗口是否可见；隐藏到托盘时即使前端还有漏网的刷新，也不做索引扫描/写入
+    visible: AtomicBool,
     pricing_path: PathBuf,
 }
 
@@ -55,6 +58,12 @@ impl Inner {
     /// 运行期唯一入口：查询前补一次 DSH 增量。没有后台线程；App 退出后不再被调用。
     fn ensure_dsh(&self, full: bool) -> dsh::IndexStats {
         let mut indexer = self.dsh.lock().expect("dsh index mutex poisoned");
+        // 隐藏到托盘时不扫盘、不写索引；只返回上一次索引的统计
+        if !self.visible.load(Ordering::Relaxed) {
+            return indexer
+                .stats()
+                .unwrap_or_else(|e| dsh::IndexStats::error(e.to_string()));
+        }
         match indexer.ensure_fresh(full) {
             Ok(stats) => stats,
             Err(e) => dsh::IndexStats::error(e.to_string()),
@@ -166,6 +175,17 @@ impl Inner {
             activity_daily,
             monthly_trend,
             sources: self.source_statuses(&dsh_stats),
+            capabilities: if filter.includes(sources::SourceId::Dsh) {
+                // DSH 日志没有 reasoning tokens / cache write 常为 0 / tool cancelled 不可辨
+                vec![
+                    "reasoningTokens".to_string(),
+                    "cacheCreateTokens".to_string(),
+                    "toolCancelled".to_string(),
+                    "decodeSpeed".to_string(),
+                ]
+            } else {
+                Vec::new()
+            },
         })
     }
 }
@@ -568,9 +588,12 @@ fn remove_provider(id: String) -> Result<types::ZProviderConfig, String> {
 /// 停在最小化时的小尺寸位置),必须先 unminimize
 fn open_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        app.state::<AppState>().visible.store(true, Ordering::Relaxed);
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        // 前端据此恢复刷新计时器并立即补一次查询（隐藏期间不做索引/刷新）
+        let _ = app.emit("window-shown", ());
     }
 }
 
@@ -725,7 +748,15 @@ pub fn run() {
             // 主窗口点关闭 = 隐藏至系统托盘后台运行;退出走托盘菜单
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
+                // 先停索引再隐藏：即使前端刷新计时器有漏网，也不会扫盘/写库
+                window
+                    .app_handle()
+                    .state::<AppState>()
+                    .visible
+                    .store(false, Ordering::Relaxed);
                 let _ = window.hide();
+                // 隐藏到托盘：前端暂停刷新与 DSH 索引，唤回时再补
+                let _ = window.app_handle().emit("window-hidden", ());
             }
             _ => {}
         })
@@ -744,6 +775,7 @@ pub fn run() {
                     zcode_path,
                     index_path,
                     dsh: Mutex::new(dsh),
+                    visible: AtomicBool::new(true),
                     pricing_path,
                 }),
             });

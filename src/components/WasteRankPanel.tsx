@@ -67,12 +67,39 @@ export function WasteRankPanel({
   const [dim, setDim] = useState<Dim>("project");
 
   const rows = useMemo<WasteRow[]>(() => {
+    // 聚合范围下同一模型/供应商会按来源出现多行；浪费指数是模型/上游维度的判断，
+    // 这里按名称合并后再排名，避免同名两行把 TOP 10 挤满
+    const sumBy = <T,>(
+      items: T[],
+      key: (x: T) => string,
+      val: (x: T) => { input: number; output: number; cache: number },
+    ) => {
+      const map = new Map<string, { input: number; output: number; cache: number }>();
+      for (const it of items) {
+        const k = key(it);
+        const v = val(it);
+        const cur = map.get(k) ?? { input: 0, output: 0, cache: 0 };
+        cur.input += v.input;
+        cur.output += v.output;
+        cur.cache += v.cache;
+        map.set(k, cur);
+      }
+      return [...map.entries()].map(([k, v]) => toRow(k, v.input, v.output, v.cache));
+    };
     const list =
       dim === "project"
         ? projects.map((p) => toRow(p.name || p.directory, p.inputTokens, p.outputTokens, p.cacheReadTokens))
         : dim === "model"
-          ? models.map((m) => toRow(m.modelId, m.inputTokens, m.outputTokens, m.cacheReadTokens))
-          : providers.map((p) => toRow(p.name, p.inputTokens, p.outputTokens, p.cacheReadTokens));
+          ? sumBy(models, (m) => m.modelId, (m) => ({
+              input: m.inputTokens,
+              output: m.outputTokens,
+              cache: m.cacheReadTokens,
+            }))
+          : sumBy(providers, (p) => p.name, (p) => ({
+              input: p.inputTokens,
+              output: p.outputTokens,
+              cache: p.cacheReadTokens,
+            }));
     return list
       .filter((r): r is WasteRow => r != null)
       .sort((a, b) => b.index - a.index)

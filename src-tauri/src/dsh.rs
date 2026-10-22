@@ -1214,6 +1214,7 @@ mod tests {
         let home = dirs::home_dir().unwrap();
         let cache_dir = home.join(".dsh/storages/session_projcache/sessions");
         let mut checked = 0usize;
+        let mut skipped_live = 0usize;
         for (sid, input, output, cr, cw) in rows {
             // 索引里的 id 去掉了 session- 前缀；projcache 文件名可能带前缀，两种都试
             let raw_id: Option<String> = conn
@@ -1221,6 +1222,7 @@ mod tests {
                 .optional()
                 .unwrap();
             let mut text = None;
+            let mut cache_path = None;
             // 日志里的 session id 可能是裸 UUID，也可能带 session- 前缀；
             // projcache 文件名则统一是 session-<uuid>。四种组合都试。
             let mut cands = vec![sid.clone(), format!("session-{sid}")];
@@ -1229,12 +1231,27 @@ mod tests {
                 cands.push(format!("session-{raw}"));
             }
             for cand in cands {
-                if let Ok(t) = fs::read_to_string(cache_dir.join(format!("{cand}.json"))) {
+                let p = cache_dir.join(format!("{cand}.json"));
+                if let Ok(t) = fs::read_to_string(&p) {
                     text = Some(t);
+                    cache_path = Some(p);
                     break;
                 }
             }
             let Some(text) = text else { continue };
+            // 活跃会话的 projcache 与日志不是同一时刻落盘：tokenUsage 可能落后一步。
+            // 跳过两分钟内还在写的会话，避免把「实时追加」误判成解析差异。
+            let recently_written = cache_path
+                .as_ref()
+                .and_then(|p| fs::metadata(p).ok())
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.elapsed().ok())
+                .map(|d| d.as_secs() < 120)
+                .unwrap_or(false);
+            if recently_written {
+                skipped_live += 1;
+                continue;
+            }
             let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
             let totals = v
                 .pointer("/record/rows/tokenUsage/val/totals")
@@ -1252,7 +1269,7 @@ mod tests {
         }
         assert!(checked > 50, "checked={checked}");
         eprintln!(
-            "reconciled {checked} sessions, requests={} files={} sessions={} tools={} err={:?}",
+            "reconciled {checked} sessions (skipped {skipped_live} live), requests={} files={} sessions={} tools={} err={:?}",
             stats.requests, stats.files, stats.sessions, stats.tools, stats.last_error
         );
         eprintln!("db at {}", dir.join("index.sqlite").display());

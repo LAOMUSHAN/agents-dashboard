@@ -265,8 +265,17 @@ export function PricingPanel({
   rowsRef.current = rows;
   configRef.current = config;
 
-  // 模型列表直接复用总览已加载的数据，避免打开设置页时再打一次同步查询
-  const modelKey = useMemo(() => models.map((m) => m.modelId).sort().join("|"), [models]);
+  // 模型列表直接复用总览已加载的数据，避免打开设置页时再打一次同步查询。
+  // 聚合范围下同一模型会按来源出现两行，单价是模型级的，这里按 modelId 去重。
+  const uniqueModels = useMemo(() => {
+    const seen = new Set<string>();
+    return models.filter((m) => {
+      if (seen.has(m.modelId)) return false;
+      seen.add(m.modelId);
+      return true;
+    });
+  }, [models]);
+  const modelKey = useMemo(() => uniqueModels.map((m) => m.modelId).sort().join("|"), [uniqueModels]);
   useEffect(() => {
     let alive = true;
     api
@@ -275,7 +284,7 @@ export function PricingPanel({
         if (!alive) return;
         setConfig(cfg);
         // 只列出该范围内使用过的模型;范围变化时保留已编辑但未保存的草稿
-        const next = models
+        const next = uniqueModels
           .map((m) => toRow(m.modelId, cfg.models[m.modelId]))
           .sort((a, b) => a.modelId.localeCompare(b.modelId));
         setRows((prev) => {
@@ -287,7 +296,7 @@ export function PricingPanel({
         // 已启用高级设置的模型默认展开,便于直接看到参数
         setExpanded(
           new Set(
-            models
+            uniqueModels
               .filter((m) => {
                 const e = cfg.models[m.modelId];
                 return e?.peak != null || e?.longContext != null;

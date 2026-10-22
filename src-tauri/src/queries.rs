@@ -641,7 +641,8 @@ pub fn get_model_stats(conn: &Connection, range: &Range, pricing_path: &std::pat
     let rows = query_rows(
         conn,
         &format!(
-            "SELECT mu.model_id AS modelId,
+            "SELECT mu.source AS source,
+                    mu.model_id AS modelId,
                     COUNT(*) AS requests,
                     COUNT(DISTINCT {SESSION_KEY}) AS sessions,
                     SUM(mu.input_tokens) AS inputTokens,
@@ -652,27 +653,28 @@ pub fn get_model_stats(conn: &Connection, range: &Range, pricing_path: &std::pat
                     {DECODE_SUMS},
                     AVG(mu.time_to_first_token_ms) AS avgTtftMs
              {FROM_CLAUSE} {where_sql}
-             GROUP BY mu.model_id
+             GROUP BY mu.source, mu.model_id
              ORDER BY requests DESC"
         ),
         &params,
         |r| {
-            let output_tokens = r.get::<_, Option<i64>>(4)?.unwrap_or(0);
-            let duration_ms = r.get::<_, Option<i64>>(7)?.unwrap_or(0);
+            let output_tokens = r.get::<_, Option<i64>>(5)?.unwrap_or(0);
+            let duration_ms = r.get::<_, Option<i64>>(8)?.unwrap_or(0);
             Ok(ModelStat {
-                model_id: r.get(0)?,
-                requests: r.get(1)?,
-                sessions: r.get(2)?,
-                input_tokens: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                source: r.get(0)?,
+                model_id: r.get(1)?,
+                requests: r.get(2)?,
+                sessions: r.get(3)?,
+                input_tokens: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
                 output_tokens,
-                cache_read_tokens: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                cache_create_tokens: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_read_tokens: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_create_tokens: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 tokens_per_sec: weighted_tokens_per_sec(output_tokens, Some(duration_ms)),
                 decode_tokens_per_sec: weighted_tokens_per_sec(
-                    r.get::<_, i64>(9)?,
-                    Some(r.get::<_, i64>(8)?),
+                    r.get::<_, i64>(10)?,
+                    Some(r.get::<_, i64>(9)?),
                 ),
-                avg_ttft_ms: r.get::<_, Option<f64>>(10)?.map(|v| v.round() as i64),
+                avg_ttft_ms: r.get::<_, Option<f64>>(11)?.map(|v| v.round() as i64),
                 cost: 0.0,
                 currency: None,
                 priced: false,
@@ -681,10 +683,11 @@ pub fn get_model_stats(conn: &Connection, range: &Range, pricing_path: &std::pat
         },
     )?;
 
-    // 逐请求计价(含峰谷/长上下文),再按模型聚合
+    // 逐请求计价(含峰谷/长上下文),再按 (source, model) 聚合：
+    // 同一模型在 zcode / DSH 的速率与费用必须分行，不能混算
     let cfg = pricing::load(pricing_path);
-    let agg = cost_rows(conn, range, &cfg, "mu.model_id", false)?;
-    let cost_by_model = agg.cost;
+    let agg = cost_rows(conn, range, &cfg, "mu.source || char(31) || mu.model_id", false)?;
+    let cost_by_key = agg.cost;
     let unpriced_set = agg.unpriced;
 
     // 错误数不过滤状态单独统计(与错误分析面板口径一致)
@@ -697,24 +700,25 @@ pub fn get_model_stats(conn: &Connection, range: &Range, pricing_path: &std::pat
     let err_rows = query_rows(
         conn,
         &format!(
-            "SELECT mu.model_id AS modelId,
+            "SELECT mu.source || char(31) || mu.model_id AS k,
                     SUM(mu.status = 'error') AS errors
              FROM model_usage mu {err_where}
-             GROUP BY mu.model_id"
+             GROUP BY mu.source, mu.model_id"
         ),
         &err_params,
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
     )?;
-    let errors_by_model: HashMap<String, i64> = err_rows.into_iter().collect();
+    let errors_by_key: HashMap<String, i64> = err_rows.into_iter().collect();
 
     Ok(rows
         .into_iter()
         .map(|mut s| {
-            s.cost = cost_by_model.get(&s.model_id).copied().unwrap_or(0.0);
+            let key = format!("{}\x1f{}", s.source, s.model_id);
+            s.cost = cost_by_key.get(&key).copied().unwrap_or(0.0);
             // 费用符号跟随该模型价格表条目的币种(与「模型单价」逐行显示一致)
             s.currency = cfg.models.get(&s.model_id).and_then(|e| e.currency.clone());
             s.priced = !unpriced_set.contains(&s.model_id);
-            s.errors = errors_by_model.get(&s.model_id).copied().unwrap_or(0);
+            s.errors = errors_by_key.get(&key).copied().unwrap_or(0);
             s
         })
         .collect())
@@ -726,7 +730,8 @@ pub fn get_agent_stats(conn: &Connection, range: &Range) -> rusqlite::Result<Vec
     let rows = query_rows(
         conn,
         &format!(
-            "SELECT mu.agent AS agent,
+            "SELECT mu.source AS source,
+                    mu.agent AS agent,
                     COUNT(*) AS requests,
                     COUNT(DISTINCT {SESSION_KEY}) AS sessions,
                     SUM(mu.input_tokens) AS inputTokens,
@@ -737,27 +742,28 @@ pub fn get_agent_stats(conn: &Connection, range: &Range) -> rusqlite::Result<Vec
                     {DECODE_SUMS},
                     AVG(mu.time_to_first_token_ms) AS avgTtftMs
              {FROM_CLAUSE} {where_sql}
-             GROUP BY mu.agent
+             GROUP BY mu.source, mu.agent
              ORDER BY requests DESC"
         ),
         &params,
         |r| {
-            let output_tokens = r.get::<_, Option<i64>>(4)?.unwrap_or(0);
-            let duration_ms = r.get::<_, Option<i64>>(7)?.unwrap_or(0);
+            let output_tokens = r.get::<_, Option<i64>>(5)?.unwrap_or(0);
+            let duration_ms = r.get::<_, Option<i64>>(8)?.unwrap_or(0);
             Ok(AgentStat {
-                agent: r.get(0)?,
-                requests: r.get(1)?,
-                sessions: r.get(2)?,
-                input_tokens: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                source: r.get(0)?,
+                agent: r.get(1)?,
+                requests: r.get(2)?,
+                sessions: r.get(3)?,
+                input_tokens: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
                 output_tokens,
-                cache_read_tokens: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                cache_create_tokens: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_read_tokens: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                cache_create_tokens: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
                 tokens_per_sec: weighted_tokens_per_sec(output_tokens, Some(duration_ms)),
                 decode_tokens_per_sec: weighted_tokens_per_sec(
-                    r.get::<_, i64>(9)?,
-                    Some(r.get::<_, i64>(8)?),
+                    r.get::<_, i64>(10)?,
+                    Some(r.get::<_, i64>(9)?),
                 ),
-                avg_ttft_ms: r.get::<_, Option<f64>>(10)?.map(|v| v.round() as i64),
+                avg_ttft_ms: r.get::<_, Option<f64>>(11)?.map(|v| v.round() as i64),
                 errors: 0,
             })
         },
@@ -773,20 +779,21 @@ pub fn get_agent_stats(conn: &Connection, range: &Range) -> rusqlite::Result<Vec
     let err_rows = query_rows(
         conn,
         &format!(
-            "SELECT mu.agent AS agent,
+            "SELECT mu.source || char(31) || COALESCE(mu.agent, '') AS k,
                     SUM(mu.status = 'error') AS errors
              FROM model_usage mu {err_where}
-             GROUP BY mu.agent"
+             GROUP BY mu.source, mu.agent"
         ),
         &err_params,
-        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
     )?;
-    let errors_by_agent: HashMap<Option<String>, i64> = err_rows.into_iter().collect();
+    let errors_by_key: HashMap<String, i64> = err_rows.into_iter().collect();
 
     Ok(rows
         .into_iter()
         .map(|mut s| {
-            s.errors = errors_by_agent.get(&s.agent).copied().unwrap_or(0);
+            let key = format!("{}\x1f{}", s.source, s.agent.clone().unwrap_or_default());
+            s.errors = errors_by_key.get(&key).copied().unwrap_or(0);
             s
         })
         .collect())
@@ -917,7 +924,8 @@ pub fn get_provider_stats(
     let rows = query_rows(
         conn,
         &format!(
-            "SELECT mu.provider_id AS providerId,
+            "SELECT mu.source AS source,
+                    mu.provider_id AS providerId,
                     COUNT(*) AS requests,
                     COUNT(DISTINCT {SESSION_KEY}) AS sessions,
                     SUM(mu.input_tokens) AS inputTokens,
@@ -928,23 +936,24 @@ pub fn get_provider_stats(
                     {DECODE_SUMS},
                     AVG(mu.time_to_first_token_ms) AS avgTtftMs
              {FROM_CLAUSE} {where_sql}
-             GROUP BY mu.provider_id"
+             GROUP BY mu.source, mu.provider_id"
         ),
         &params,
         |r| {
             Ok((
                 r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
                 Agg {
-                    requests: r.get(1)?,
-                    sessions: r.get(2)?,
-                    input_tokens: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                    output_tokens: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
-                    cache_read_tokens: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
-                    cache_create_tokens: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
-                    duration_ms: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
-                    avg_ttft_ms: r.get::<_, Option<f64>>(10)?.map(|v| v.round() as i64),
+                    requests: r.get(2)?,
+                    sessions: r.get(3)?,
+                    input_tokens: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                    output_tokens: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    cache_read_tokens: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                    cache_create_tokens: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
+                    duration_ms: r.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                    avg_ttft_ms: r.get::<_, Option<f64>>(11)?.map(|v| v.round() as i64),
                 },
-                (r.get::<_, i64>(8)?, r.get::<_, i64>(9)?),
+                (r.get::<_, i64>(9)?, r.get::<_, i64>(10)?),
             ))
         },
     )?;
@@ -1065,11 +1074,12 @@ pub fn get_provider_stats(
 
     let mut result: Vec<ProviderStat> = rows
         .into_iter()
-        .map(|(provider_id, a, (decode_duration_ms, decode_output_tokens))| {
+        .map(|(source, provider_id, a, (decode_duration_ms, decode_output_tokens))| {
             let total_tokens = a.input_tokens + a.output_tokens;
             let cost_cny_usd = cost_cny_by_provider.get(&provider_id).copied().unwrap_or(0.0);
             let cost = cost_by_provider.get(&provider_id).copied().unwrap_or(0.0);
             ProviderStat {
+                source,
                 name: names.get(&provider_id).cloned().unwrap_or_else(|| provider_id.clone()),
                 total_tokens,
                 tokens_per_sec: weighted_tokens_per_sec(a.output_tokens, Some(a.duration_ms)),
@@ -1166,7 +1176,7 @@ pub fn get_request_log(
     bind.extend(params.iter().map(|&v| rusqlite::types::Value::from(v)));
 
     let mut stmt = conn.prepare(&format!(
-        "SELECT mu.id, mu.started_at, mu.model_id, mu.agent, mu.status,
+        "SELECT mu.source, mu.id, mu.started_at, mu.model_id, mu.agent, mu.status,
                 mu.duration_ms, mu.time_to_first_token_ms,
                 mu.input_tokens, mu.output_tokens,
                 mu.cache_read_input_tokens, mu.cache_creation_input_tokens,
@@ -1177,20 +1187,21 @@ pub fn get_request_log(
     let rows = stmt.query_map(params_from_iter(bind.iter()), |r| {
         Ok((
             r.get::<_, String>(0)?,
-            r.get::<_, i64>(1)?,
-            r.get::<_, String>(2)?,
-            r.get::<_, Option<String>>(3)?,
-            r.get::<_, String>(4)?,
-            r.get::<_, Option<i64>>(5)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, Option<String>>(4)?,
+            r.get::<_, String>(5)?,
             r.get::<_, Option<i64>>(6)?,
-            r.get::<_, Option<i64>>(7)?.unwrap_or(0),
+            r.get::<_, Option<i64>>(7)?,
             r.get::<_, Option<i64>>(8)?.unwrap_or(0),
             r.get::<_, Option<i64>>(9)?.unwrap_or(0),
             r.get::<_, Option<i64>>(10)?.unwrap_or(0),
-            r.get::<_, String>(11)?,
-            r.get::<_, Option<String>>(12)?,
+            r.get::<_, Option<i64>>(11)?.unwrap_or(0),
+            r.get::<_, String>(12)?,
             r.get::<_, Option<String>>(13)?,
-            r.get::<_, String>(14)?,
+            r.get::<_, Option<String>>(14)?,
+            r.get::<_, String>(15)?,
         ))
     })?;
 
@@ -1203,6 +1214,7 @@ pub fn get_request_log(
                 .cloned()
                 .unwrap_or_else(|| (None, String::new()));
             RequestGroup {
+                source: id.split(':').next().unwrap_or("").to_string(),
                 session_id: id.clone(),
                 title,
                 project: base_name(&dir),
@@ -1218,6 +1230,7 @@ pub fn get_request_log(
 
     for row in rows {
         let (
+            source,
             id,
             started_at,
             model_id,
@@ -1245,6 +1258,7 @@ pub fn get_request_log(
             cache_create_tokens,
         );
         let request_row = RequestRow {
+            source,
             id,
             started_at,
             model_id,
@@ -1286,25 +1300,27 @@ pub fn get_tool_stats(conn: &Connection, range: &Range) -> rusqlite::Result<Vec<
     let rows = query_rows(
         conn,
         &format!(
-            "SELECT t.tool_name AS toolName,
+            "SELECT t.source AS source,
+                    t.tool_name AS toolName,
                     COUNT(*) AS calls,
                     SUM(t.status = 'error') AS errors,
                     SUM(t.status = 'cancelled') AS cancelled,
                     AVG(t.duration_ms) AS avgMs,
                     MAX(t.duration_ms) AS maxMs
              FROM tool_usage t {where_sql}
-             GROUP BY t.tool_name
+             GROUP BY t.source, t.tool_name
              ORDER BY calls DESC"
         ),
         &params,
         |r| {
             Ok(ToolStat {
-                tool_name: r.get(0)?,
-                calls: r.get(1)?,
-                errors: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
-                cancelled: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
-                avg_ms: r.get::<_, Option<f64>>(4)?.map(|v| v.round() as i64),
-                max_ms: r.get(5)?,
+                source: r.get(0)?,
+                tool_name: r.get(1)?,
+                calls: r.get(2)?,
+                errors: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                cancelled: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                avg_ms: r.get::<_, Option<f64>>(5)?.map(|v| v.round() as i64),
+                max_ms: r.get(6)?,
             })
         },
     )?;
@@ -1412,7 +1428,8 @@ pub fn get_latency_stats(conn: &Connection, range: &Range) -> rusqlite::Result<V
     let rows = query_rows(
         conn,
         &format!(
-            "SELECT mu.model_id AS modelId,
+            "SELECT mu.source AS source,
+                    mu.model_id AS modelId,
                     mu.duration_ms AS durationMs,
                     mu.time_to_first_token_ms AS ttftMs,
                     mu.output_tokens AS outputTokens
@@ -1424,9 +1441,10 @@ pub fn get_latency_stats(conn: &Connection, range: &Range) -> rusqlite::Result<V
         |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, String>(1)?,
                 r.get::<_, Option<i64>>(2)?,
                 r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<i64>>(4)?,
             ))
         },
     )?;
@@ -1442,9 +1460,9 @@ pub fn get_latency_stats(conn: &Connection, range: &Range) -> rusqlite::Result<V
         decode_output_sum: i64,
         decode_duration_sum: i64,
     }
-    let mut by_model: HashMap<String, LatAcc> = HashMap::new();
-    for (model_id, duration_ms, ttft_ms, output_tokens) in rows {
-        let m = by_model.entry(model_id).or_default();
+    let mut by_model: HashMap<(String, String), LatAcc> = HashMap::new();
+    for (source, model_id, duration_ms, ttft_ms, output_tokens) in rows {
+        let m = by_model.entry((source, model_id)).or_default();
         if let Some(d) = duration_ms {
             m.durations.push(d);
         }
@@ -1467,7 +1485,7 @@ pub fn get_latency_stats(conn: &Connection, range: &Range) -> rusqlite::Result<V
 
     let mut result: Vec<LatencyStat> = by_model
         .into_iter()
-        .map(|(model_id, m)| {
+        .map(|((source, model_id), m)| {
             let LatAcc { durations, ttfts, output_sum, duration_sum, decode_output_sum, decode_duration_sum } = m;
             let mut sorted_d = durations.clone();
             sorted_d.sort_unstable();
@@ -1479,6 +1497,7 @@ pub fn get_latency_stats(conn: &Connection, range: &Range) -> rusqlite::Result<V
                 Some((durations.iter().sum::<i64>() as f64 / durations.len() as f64).round() as i64)
             };
             LatencyStat {
+                source,
                 model_id,
                 requests: durations.len() as i64,
                 avg_ms: avg,
@@ -1613,7 +1632,15 @@ mod tests {
     use super::*;
 
     fn conn() -> Connection {
-        rusqlite::Connection::open_with_flags(crate::db::db_path(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).expect("打开 zcode 库失败")
+        // 测试也走生产同一条统一查询层：zcode 视图带 source 列、id 加命名空间前缀。
+        // 索引库只需要存在，Zcode 范围的视图不会引用 dsh_* 表。
+        let index = std::env::temp_dir().join("agents-dashboard-test-index.sqlite");
+        crate::unified::open_query(
+            &index,
+            &crate::db::db_path(),
+            crate::sources::SourceFilter::Zcode,
+        )
+        .expect("打开统一查询层失败")
     }
 
     fn pricing_path() -> std::path::PathBuf {

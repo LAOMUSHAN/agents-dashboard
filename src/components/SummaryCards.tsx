@@ -66,11 +66,21 @@ function KpiCard({ item }: { item: Kpi }) {
 export function SummaryCards({
   summary,
   trend = [],
+  capabilities = [],
+  source = "all",
 }: {
   summary: Summary | null;
   trend?: TrendPoint[];
+  /** 聚合范围下不完整的指标（如 DSH 不提供 reasoning tokens） */
+  capabilities?: string[];
+  /** 当前数据源范围；用于把「仅 zcode」与「DSH 未提供」说清楚 */
+  source?: "all" | "zcode" | "dsh";
 }) {
   const [more, setMore] = useState(false);
+  const partialReasoning = capabilities.includes("reasoningTokens");
+  const partialCacheWrite = capabilities.includes("cacheCreateTokens");
+  const partialDecode = capabilities.includes("decodeSpeed");
+  const partialNote = source === "dsh" ? "（DSH 未提供）" : "（仅 zcode）";
 
   const series = {
     tokens: trend.map((p) => p.inputTokens + p.outputTokens),
@@ -113,7 +123,9 @@ export function SummaryCards({
           label: "解码速度",
           value: fmtSpeed(summary.decodeTokensPerSec),
           unit: "tok/s",
-          hint: "输出 ÷ (LLM 耗时 − 首 token)",
+          hint: partialDecode
+            ? "输出 ÷ (LLM 耗时 − 首 token) · 仅含有流式时间戳的请求"
+            : "输出 ÷ (LLM 耗时 − 首 token)",
           series: series.decode,
           mode: "pct",
           avg: true,
@@ -122,14 +134,14 @@ export function SummaryCards({
         {
           label: "缓存读",
           value: fmtTokens(summary.cacheReadTokens),
-          hint: `缓存写 ${fmtTokens(summary.cacheCreateTokens)}`,
+          hint: `缓存写 ${fmtTokens(summary.cacheCreateTokens)}${partialCacheWrite ? partialNote : ""}`,
           series: series.cacheRead,
           mode: "pct",
         },
         {
           label: "输入 tokens",
           value: fmtTokens(summary.inputTokens),
-          hint: `含推理 ${fmtTokens(summary.reasoningTokens)}`,
+          hint: `含推理 ${fmtTokens(summary.reasoningTokens)}${partialReasoning ? partialNote : ""}`,
           series: series.input,
           mode: "pct",
         },

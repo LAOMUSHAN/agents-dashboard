@@ -210,6 +210,8 @@ pub struct ProviderTrendPoint {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStat {
+    /// "zcode" / "dsh"；全部范围下同一模型可能两行（速率/分位数不能混算）
+    pub source: String,
     pub model_id: String,
     pub requests: i64,
     pub sessions: i64,
@@ -236,6 +238,7 @@ pub struct ModelStat {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStat {
+    pub source: String,
     pub agent: Option<String>,
     pub requests: i64,
     pub sessions: i64,
@@ -309,6 +312,7 @@ pub struct ProviderModelStat {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderStat {
+    pub source: String,
     pub provider_id: String,
     pub name: String,
     pub requests: i64,
@@ -338,6 +342,8 @@ pub struct ProviderStat {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestRow {
+    /// "zcode" / "dsh"；请求日志组头与行首徽章用
+    pub source: String,
     /// model_usage.id 在 zcode 库里是 TEXT(如 usage_model_xxx),不是整数
     pub id: String,
     pub started_at: i64,
@@ -368,6 +374,7 @@ pub struct RequestRow {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestGroup {
+    pub source: String,
     pub session_id: String,
     pub title: Option<String>,
     pub project: String,
@@ -388,6 +395,7 @@ pub struct RequestLogResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolStat {
+    pub source: String,
     pub tool_name: String,
     pub calls: i64,
     pub errors: i64,
@@ -426,6 +434,7 @@ pub struct ErrorStats {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LatencyStat {
+    pub source: String,
     pub model_id: String,
     pub requests: i64,
     pub avg_ms: Option<i64>,
@@ -546,4 +555,7 @@ pub struct DashboardPayload {
     pub monthly_trend: Vec<MonthPoint>,
     /// 各数据源的可用性 / 新鲜度；某个源不可用时前端置灰并提示
     pub sources: Vec<SourceStatus>,
+    /// 聚合范围下不完整的指标（如 DSH 不提供 reasoning tokens）；
+    /// 前端据此显示「仅 zcode」而不是把 0 当总数
+    pub capabilities: Vec<String>,
 }

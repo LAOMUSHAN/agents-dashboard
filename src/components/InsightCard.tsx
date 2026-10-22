@@ -11,15 +11,31 @@ export function InsightCard({
   summary,
   models,
   providers,
+  sourceTotals = [],
 }: {
   summary: Summary | null;
   models: ModelStat[];
   providers: ProviderStat[];
+  /** 按来源汇总的请求/tokens；用于在聚合视图里点明构成 */
+  sourceTotals?: { id: string; requests: number; tokens: number }[];
 }) {
   const insights = useMemo<Insight[]>(() => {
     const list: Insight[] = [];
     if (!summary) return list;
     const hit = summary.inputTokens > 0 ? summary.cacheReadTokens / summary.inputTokens : null;
+
+    // 两个源都有用量时，先交代构成，避免「全部」看起来像一个来源
+    if (sourceTotals.length > 1) {
+      const totalReq = sourceTotals.reduce((s, x) => s + x.requests, 0);
+      const totalTok = sourceTotals.reduce((s, x) => s + x.tokens, 0);
+      const parts = sourceTotals
+        .map(
+          (x) =>
+            `${x.id === "dsh" ? "DSH" : "zcode"} ${fmtPercent(x.requests, totalReq)} 请求 / ${fmtPercent(x.tokens, totalTok)} tokens`,
+        )
+        .join("，");
+      list.push({ text: `区间内两个数据源都有用量：${parts}。` });
+    }
 
     // 最活跃模型(按输出 tokens)
     const top = [...models].sort((a, b) => b.outputTokens - a.outputTokens)[0];
@@ -70,7 +86,7 @@ export function InsightCard({
       });
     }
     return list;
-  }, [summary, models, providers]);
+  }, [summary, models, providers, sourceTotals]);
 
   const [idx, setIdx] = useState(0);
   if (!summary || insights.length === 0) return null;
