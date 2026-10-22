@@ -356,7 +356,7 @@ export interface LatencyStat {
   decodeTokensPerSec: number | null;
 }
 
-/** 活跃热力图单元格:本地日期 + 小时 + 调用次数 */
+/** 活跃热力图单元格:本地日期 + 小时 + 总 Token */
 export interface HeatCell {
   /** 本地日期 YYYY-MM-DD */
   day: string;
@@ -364,7 +364,8 @@ export interface HeatCell {
   dow: number;
   /** 0-23,本地时间 */
   hour: number;
-  calls: number;
+  /** 输入 + 输出(缓存读写是输入子集,不叠加) */
+  tokens: number;
 }
 
 /** 月粒度趋势点;bucket 格式 "YYYY-MM" */

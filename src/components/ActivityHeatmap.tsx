@@ -9,7 +9,7 @@ import {
 import { CalendarDays, ChevronDown, X } from "lucide-react";
 import type { HeatCell } from "../../shared/types";
 import type { Range } from "../api";
-import { fmtNumber } from "../format";
+import { fmtTokens } from "../format";
 import { barScale } from "./ui/data-viz";
 import { Panel } from "./ui/panel";
 import { Segmented } from "./ui/segmented";
@@ -22,7 +22,7 @@ type TipBase = {
   cellKey: string;
   label: string;
   time: string;
-  calls: number;
+  tokens: number;
   share: number;
   shareRange: number;
   shareLabel: string;
@@ -191,8 +191,8 @@ function HeatTip({
       )}
       <div className="pr-5 text-[10px] font-medium tracking-[0.04em] text-muted-foreground">{tip.label}</div>
       <div className="mt-1 flex items-baseline gap-1.5">
-        <span className="text-[20px] font-semibold leading-none tabular-nums text-foreground">{fmtNumber(tip.calls)}</span>
-        <span className="text-[10.5px] text-muted-foreground">次调用</span>
+        <span className="text-[20px] font-semibold leading-none tabular-nums text-foreground">{fmtTokens(tip.tokens)}</span>
+        <span className="text-[10.5px] text-muted-foreground">Token</span>
       </div>
       <div className="mt-1 text-[10.5px] tabular-nums text-muted-foreground">{tip.time}</div>
       {expanded ? (
@@ -271,7 +271,7 @@ function HeatCellButton({
     <button
       type="button"
       data-heat-cell
-      aria-label={`${base.label} ${base.time}，${base.calls} 次调用`}
+      aria-label={`${base.label} ${base.time}，${fmtTokens(base.tokens)} Token`}
       aria-pressed={pinned}
       className={cn(
         "heat-cell relative w-full rounded-[3px] outline-none transition-transform duration-150 hover:z-10 hover:scale-[1.12] focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-clay/50",
@@ -289,7 +289,7 @@ function HeatCellButton({
 }
 
 function VolumeBar({ value, max, delay = 0 }: { value: number; max: number; delay?: number }) {
-  // 与「用量明细 / 请求日志」同一套 barScale(asinh) 压缩；标尺取当前可见行的最大值
+  // 与「用量明细 / 请求日志」同一套 barScale(asinh) 压缩；标尺取整个所选范围的最大日 Token
   const pct = value > 0 && max > 0 ? barScale(value, max) * 100 : 0;
   return (
     <div className="flex h-full items-center pr-1" aria-hidden>
@@ -309,7 +309,7 @@ function Empty({ label }: { label: string }) {
       <span className="flex size-9 items-center justify-center rounded-full bg-accent text-muted-foreground">
         <CalendarDays size={16} />
       </span>
-      <p className="text-[12px] text-muted-foreground">该时间范围内没有调用</p>
+      <p className="text-[12px] text-muted-foreground">该时间范围内没有数据</p>
       <p className="text-[10px] text-muted-foreground/70">{label}</p>
     </div>
   );
@@ -397,16 +397,16 @@ export function ActivityHeatmap({
     if (win.mode === "weekdays") {
       for (const c of cells) {
         if (c.dow < 0 || c.dow > 6 || c.hour < 0 || c.hour > 23) continue;
-        dowMap[c.dow][c.hour] += c.calls;
-        if (c.calls > 0) active.add(c.day);
+        dowMap[c.dow][c.hour] += c.tokens;
+        if (c.tokens > 0) active.add(c.day);
       }
     } else {
       for (const key of activeKeys) dayMap.set(key, Array<number>(24).fill(0));
       for (const c of cells) {
         const row = dayMap.get(c.day);
         if (!row || c.hour < 0 || c.hour > 23) continue;
-        row[c.hour] += c.calls;
-        if (c.calls > 0) active.add(c.day);
+        row[c.hour] += c.tokens;
+        if (c.tokens > 0) active.add(c.day);
       }
     }
 
@@ -432,11 +432,11 @@ export function ActivityHeatmap({
     for (const [key, row] of dayMap) dayTotals.set(key, row.reduce((a, b) => a + b, 0));
     const dowTotals = dowMap.map((row) => row.reduce((a, b) => a + b, 0));
 
-    let mostActive: { label: string; calls: number } | null = null;
+    let mostActive: { label: string; tokens: number } | null = null;
     if (win.mode === "weekdays") {
       let best = 0;
       for (let d = 1; d < 7; d++) if (dowTotals[d] > dowTotals[best]) best = d;
-      if (dowTotals[best] > 0) mostActive = { label: DOW_FULL[best], calls: dowTotals[best] };
+      if (dowTotals[best] > 0) mostActive = { label: DOW_FULL[best], tokens: dowTotals[best] };
     } else if (win.mode === "dates") {
       let bestKey = "";
       let best = 0;
@@ -446,7 +446,7 @@ export function ActivityHeatmap({
           bestKey = key;
         }
       }
-      if (best > 0) mostActive = { label: `${fmtDay(bestKey)} ${weekday(bestKey)}`, calls: best };
+      if (best > 0) mostActive = { label: `${fmtDay(bestKey)} ${weekday(bestKey)}`, tokens: best };
     }
 
     return {
@@ -465,20 +465,20 @@ export function ActivityHeatmap({
     };
   }, [cells, win, shownKeys]);
 
-  // 调用量条沿用 tokens 条的页面级标尺：取整个所选范围的最大日调用量，
+  // Token 条沿用 tokens 条的页面级标尺：取整个所选范围的最大日 Token，
   // 展开/收起时同一天的条长不跳变。
   const barMax = useMemo(() => {
     if (win.mode === "weekdays") return Math.max(...agg.dowTotals, 0);
     const inRange = new Set(win.keys);
     const totals = new Map<string, number>();
     for (const c of cells) {
-      if (inRange.has(c.day)) totals.set(c.day, (totals.get(c.day) ?? 0) + c.calls);
+      if (inRange.has(c.day)) totals.set(c.day, (totals.get(c.day) ?? 0) + c.tokens);
     }
     return Math.max(...totals.values(), 0);
   }, [cells, win, agg.dowTotals]);
 
-  const level = (calls: number) =>
-    calls <= 0 || agg.maxCell <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((calls / agg.maxCell) * 4)));
+  const level = (tokens: number) =>
+    tokens <= 0 || agg.maxCell <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((tokens / agg.maxCell) * 4)));
 
   const hostRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<CellTip | null>(null);
@@ -558,39 +558,39 @@ export function ActivityHeatmap({
     };
   }, [pinned]);
 
-  const dayTip = (key: string, hour: number, calls: number): TipBase => {
+  const dayTip = (key: string, hour: number, tokens: number): TipBase => {
     const dayTotal = agg.dayTotals.get(key) ?? 0;
     return {
       cellKey: `${key}|${hour}`,
       label: `${fmtLongDay(key)} ${weekday(key)}`,
       time: hourRange(hour),
-      calls,
-      share: dayTotal > 0 ? calls / dayTotal : 0,
-      shareRange: agg.total > 0 ? calls / agg.total : 0,
+      tokens,
+      share: dayTotal > 0 ? tokens / dayTotal : 0,
+      shareRange: agg.total > 0 ? tokens / agg.total : 0,
       shareLabel: "占当日",
     };
   };
 
-  const weekdayTip = (dow: number, hour: number, calls: number): TipBase => {
+  const weekdayTip = (dow: number, hour: number, tokens: number): TipBase => {
     const dowTotal = agg.dowTotals[dow] ?? 0;
     return {
       cellKey: `dow:${dow}|${hour}`,
       label: DOW_FULL[dow],
       time: hourRange(hour),
-      calls,
-      share: dowTotal > 0 ? calls / dowTotal : 0,
-      shareRange: agg.total > 0 ? calls / agg.total : 0,
+      tokens,
+      share: dowTotal > 0 ? tokens / dowTotal : 0,
+      shareRange: agg.total > 0 ? tokens / agg.total : 0,
       shareLabel: "占该星期",
     };
   };
 
-  const totalTip = (hour: number, calls: number): TipBase => ({
+  const totalTip = (hour: number, tokens: number): TipBase => ({
     cellKey: `total|${hour}`,
     label: "区间合计",
     time: hourRange(hour),
-    calls,
-    share: agg.total > 0 ? calls / agg.total : 0,
-    shareRange: agg.total > 0 ? calls / agg.total : 0,
+    tokens,
+    share: agg.total > 0 ? tokens / agg.total : 0,
+    shareRange: agg.total > 0 ? tokens / agg.total : 0,
     shareLabel: "占区间",
   });
 
@@ -610,7 +610,7 @@ export function ActivityHeatmap({
   return (
     <Panel
       title="活跃时段"
-      sub="本地时间 · 模型调用次数"
+      sub="本地时间 · 总 Token"
       actions={
         <div className="flex items-center gap-2">
           {win.longRange && (
@@ -637,12 +637,12 @@ export function ActivityHeatmap({
           <>
             <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5 px-1 pb-2.5">
               <Metric
-                label="调用"
-                value={fmtNumber(agg.total)}
+                label="总 Token"
+                value={fmtTokens(agg.total)}
                 hint={win.mode === "dates" && shownKeys.length < totalDays ? `近 ${shownKeys.length} 天` : undefined}
               />
               {agg.peakHour >= 0 && (
-                <Metric label="峰值" value={`${pad2(agg.peakHour)}:00`} hint={`${fmtNumber(agg.maxHour)} 次`} />
+                <Metric label="峰值" value={`${pad2(agg.peakHour)}:00`} hint={`${fmtTokens(agg.maxHour)} Token`} />
               )}
               {win.mode === "single" ? (
                 <Metric label="活跃小时" value={`${agg.activeHours} 小时`} />
@@ -652,7 +652,7 @@ export function ActivityHeatmap({
                     <Metric
                       label={win.mode === "weekdays" ? "最活跃" : "最活跃日"}
                       value={agg.mostActive.label}
-                      hint={`${fmtNumber(agg.mostActive.calls)} 次`}
+                      hint={`${fmtTokens(agg.mostActive.tokens)} Token`}
                     />
                   )}
                   <Metric label="活跃日" value={`${agg.activeDays} 天`} />
@@ -694,15 +694,15 @@ export function ActivityHeatmap({
             {win.mode === "single" ? (
               <div className="mt-1">
                 <div className="relative flex h-[104px] items-end gap-[3px] border-b border-border/60 px-1" role="group" aria-label="24 小时活跃时段">
-                  {dayHours.map((calls, hour) => {
-                    const base = dayTip(win.keys[0], hour, calls);
-                    const h = agg.maxCell > 0 ? Math.max(2, (calls / agg.maxCell) * 92) : 2;
+                  {dayHours.map((tokens, hour) => {
+                    const base = dayTip(win.keys[0], hour, tokens);
+                    const h = agg.maxCell > 0 ? Math.max(2, (tokens / agg.maxCell) * 92) : 2;
                     return (
                       <button
                         key={hour}
                         type="button"
                         data-heat-cell
-                        aria-label={`${base.label} ${base.time}，${calls} 次调用`}
+                        aria-label={`${base.label} ${base.time}，${fmtTokens(tokens)} Token`}
                         aria-pressed={pinned?.cellKey === base.cellKey}
                         className="group relative flex h-full flex-1 items-end justify-center outline-none focus-visible:z-10"
                         onMouseEnter={(e) => onHover(e, base, e.currentTarget.firstElementChild)}
@@ -714,7 +714,7 @@ export function ActivityHeatmap({
                         <span
                           className={cn(
                             "heat-bar w-full rounded-t-[3px] transition-[filter,background-color] duration-150 group-hover:brightness-110",
-                            calls === 0 ? "bg-muted/45" : LEVELS[level(calls)],
+                            tokens === 0 ? "bg-muted/45" : LEVELS[level(tokens)],
                             pinned?.cellKey === base.cellKey
                               ? "ring-2 ring-clay/70"
                               : hour === agg.peakHour && "ring-1 ring-clay/60 ring-offset-1 ring-offset-card",
@@ -757,7 +757,7 @@ export function ActivityHeatmap({
                         </span>
                       ))}
                       <span className="pl-0.5 text-[9.5px] text-muted-foreground">分布</span>
-                      <span className="text-right text-[9.5px] text-muted-foreground">调用量</span>
+                      <span className="text-right text-[9.5px] text-muted-foreground">Token</span>
                     </div>
 
                     {win.mode === "weekdays"
@@ -773,13 +773,13 @@ export function ActivityHeatmap({
                               <div className="sticky left-0 z-10 flex items-baseline gap-1.5 bg-card py-0.5 pr-2">
                                 <span className="text-[11px] font-medium text-foreground">{DOW_FULL[dow]}</span>
                               </div>
-                              {row.map((calls, hour) => {
-                                const base = weekdayTip(dow, hour, calls);
+                              {row.map((tokens, hour) => {
+                                const base = weekdayTip(dow, hour, tokens);
                                 return (
                                   <HeatCellButton
                                     key={hour}
                                     base={base}
-                                    levelClass={LEVELS[level(calls)]}
+                                    levelClass={LEVELS[level(tokens)]}
                                     rowH={rowH}
                                     pinned={pinned?.cellKey === base.cellKey}
                                     onHover={onHover}
@@ -795,7 +795,7 @@ export function ActivityHeatmap({
                                   dowTotal > 0 ? "text-foreground" : "text-muted-foreground/45",
                                 )}
                               >
-                                {fmtNumber(dowTotal)}
+                                {fmtTokens(dowTotal)}
                               </span>
                             </div>
                           );
@@ -822,13 +822,13 @@ export function ActivityHeatmap({
                                   {isToday ? "今天" : isYesterday ? "昨天" : weekday(key)}
                                 </span>
                               </div>
-                              {hours.map((calls, hour) => {
-                                const base = dayTip(key, hour, calls);
+                              {hours.map((tokens, hour) => {
+                                const base = dayTip(key, hour, tokens);
                                 return (
                                   <HeatCellButton
                                     key={hour}
                                     base={base}
-                                    levelClass={LEVELS[level(calls)]}
+                                    levelClass={LEVELS[level(tokens)]}
                                     rowH={rowH}
                                     pinned={pinned?.cellKey === base.cellKey}
                                     onHover={onHover}
@@ -844,7 +844,7 @@ export function ActivityHeatmap({
                                   dayTotal > 0 ? "text-foreground" : "text-muted-foreground/45",
                                 )}
                               >
-                                {fmtNumber(dayTotal)}
+                                {fmtTokens(dayTotal)}
                               </span>
                             </div>
                           );
@@ -855,15 +855,15 @@ export function ActivityHeatmap({
                       style={{ gridTemplateColumns: GRID_COLS }}
                     >
                       <span className="sticky left-0 z-30 bg-card text-[10px] font-medium text-muted-foreground">合计</span>
-                      {agg.hourTotals.map((calls, hour) => {
-                        const base = totalTip(hour, calls);
-                        const h = agg.maxHour > 0 ? Math.max(2, (calls / agg.maxHour) * 24) : 2;
+                      {agg.hourTotals.map((tokens, hour) => {
+                        const base = totalTip(hour, tokens);
+                        const h = agg.maxHour > 0 ? Math.max(2, (tokens / agg.maxHour) * 24) : 2;
                         return (
                           <button
                             key={hour}
                             type="button"
                             data-heat-cell
-                            aria-label={`${base.label} ${base.time}，${calls} 次调用`}
+                            aria-label={`${base.label} ${base.time}，${fmtTokens(tokens)} Token`}
                             aria-pressed={pinned?.cellKey === base.cellKey}
                             className="group flex h-[26px] items-end justify-center outline-none focus-visible:z-10"
                             onMouseEnter={(e) => onHover(e, base, e.currentTarget.firstElementChild)}
@@ -875,7 +875,7 @@ export function ActivityHeatmap({
                             <span
                               className={cn(
                                 "w-full rounded-t-[2px] transition-[height,background-color,filter] duration-200 group-hover:brightness-110",
-                                calls === 0 ? "bg-muted/40" : hour === agg.peakHour ? "bg-clay" : "bg-clay/50",
+                                tokens === 0 ? "bg-muted/40" : hour === agg.peakHour ? "bg-clay" : "bg-clay/50",
                                 pinned?.cellKey === base.cellKey && "ring-2 ring-clay/70",
                               )}
                               style={{ height: `${h}px` }}
@@ -885,7 +885,7 @@ export function ActivityHeatmap({
                       })}
                       <span aria-hidden />
                       <span className="text-right text-[10.5px] font-semibold tabular-nums text-foreground">
-                        {fmtNumber(agg.total)}
+                        {fmtTokens(agg.total)}
                       </span>
                     </div>
                   </div>

@@ -448,7 +448,7 @@ pub struct LatencyStat {
     pub decode_tokens_per_sec: Option<f64>,
 }
 
-/// 活跃热力图单元格:本地日期 + 小时 + 调用次数
+/// 活跃热力图单元格:本地日期 + 小时 + 总 Token
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeatCell {
@@ -458,7 +458,8 @@ pub struct HeatCell {
     pub dow: i64,
     /// 0-23,本地时间
     pub hour: i64,
-    pub calls: i64,
+    /// 输入 + 输出(缓存读写是输入子集,不叠加)
+    pub tokens: i64,
 }
 
 /// 月粒度趋势点;bucket 格式 "YYYY-MM"
