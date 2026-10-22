@@ -481,59 +481,6 @@ pub struct MonthPoint {
     pub cost: f64,
 }
 
-/// 供应商下单个模型的配置(config.json 里 models 映射的扁平化视图)
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ZModelEntry {
-    /// models 映射的 key,即模型名
-    pub name: String,
-    /// limit.context(上下文上限 token);字段缺失时为 None
-    pub context_limit: Option<i64>,
-    /// limit.output
-    pub output_limit: Option<i64>,
-    /// modalities.input 数组里含 "image"
-    pub input_image: bool,
-    /// modalities.input 数组里含 "video"
-    pub input_video: bool,
-}
-
-/// zcode 配置文件(~/.zcode/v2/config.json)里的单个供应商条目。
-/// 只是配置的只读投影:apiKey 绝不回传明文,只有 hasApiKey 和尾号 hint
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ZProviderEntry {
-    pub id: String,
-    pub name: String,
-    pub kind: Option<String>,
-    pub source: Option<String>,
-    /// 智谱账号供应商(内置):面板只读
-    pub builtin: bool,
-    /// 同 builtin,单独给前端分组用(账号覆盖行 + family 行)
-    pub preset: bool,
-    /// zcode 规则里的 group:standard-personal / zai-family / bigmodel-family
-    pub group: Option<String>,
-    /// enabled 字段缺失视为启用(zcode 自定义供应商通常不写这个字段)
-    pub enabled: bool,
-    pub system_disabled_reason: Option<String>,
-    /// 显式改名:serde 的 camelCase 会把 base_url 变成 baseUrl,
-    /// 而 zcode 配置和前端约定都是 baseURL(大写 URL)
-    #[serde(rename = "baseURL")]
-    pub base_url: Option<String>,
-    pub has_api_key: bool,
-    /// apiKey 尾 4 位;密钥过短时为 None,前端显示"已设置"
-    pub api_key_hint: Option<String>,
-    /// 该供应商可用的模型配置列表
-    pub models: Vec<ZModelEntry>,
-}
-
-/// get_provider_config 的响应;path 用于界面提示配置文件位置
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ZProviderConfig {
-    pub path: String,
-    pub providers: Vec<ZProviderEntry>,
-}
-
 /// 仪表盘一次性返回的全部数据：一次 IPC、一个数据库快照，
 /// 避免 14 个命令各查一遍导致同一屏里的数字来自不同时刻。
 #[derive(Debug, Serialize)]

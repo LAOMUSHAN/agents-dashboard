@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 // zcode 的供应商配置分两处:
-// - ~/.zcode/v2/provider_config.json 是 2026-09 之后「模型设置」页真正读写的地方,
+// - ~/.zcode/v2/provider_config.json 是 2026-09 之后 ZCode 自己的「模型设置」页读写的地方,
 //   model_usage.provider_id 现在就是这里的 providerId(UUID / new-provider-N / account:xxx);
 // - ~/.zcode/v2/config.json 是旧版存储,2026-09-13 后不再更新,只留作名称兜底。
 // 内置账号供应商(Z.ai / BigModel 套餐)定义在 ZCode 安装目录的 zcode-builtin.json 里。
@@ -16,22 +16,13 @@ pub(crate) fn config_path() -> PathBuf {
     home.join(".zcode/v2/config.json")
 }
 
-/// 新版个人供应商配置:面板读写的就是这个文件
-pub(crate) fn personal_config_path() -> PathBuf {
+/// 新版供应商配置:用于读取供应商展示名
+pub(crate) fn provider_config_path() -> PathBuf {
     if let Ok(p) = std::env::var("ZCODE_PROVIDER_CONFIG_PATH") {
         return PathBuf::from(p);
     }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".zcode/v2/provider_config.json")
-}
-
-/// zcode 桌面端设置(账号套餐选择、窗口等)
-pub(crate) fn setting_path() -> PathBuf {
-    if let Ok(p) = std::env::var("ZCODE_SETTING_PATH") {
-        return PathBuf::from(p);
-    }
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".zcode/v2/setting.json")
 }
 
 /// 内置供应商定义文件:随 ZCode 安装包分发,位置随安装方式变化。
@@ -45,24 +36,6 @@ pub(crate) fn builtin_config_path() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-/// 智谱内置账号供应商的家族展示名
-pub(crate) fn family_label(family: &str) -> &'static str {
-    match family {
-        "zai" => "Z.ai",
-        "bigmodel" => "BigModel",
-        _ => "智谱",
-    }
-}
-
-/// 内置账号供应商的 id -> 名称(Z.ai / BigModel 的账号套餐)
-pub(crate) fn builtin_provider_names() -> HashMap<String, String> {
-    let mut names = HashMap::new();
-    if let Some(path) = builtin_config_path() {
-        merge_rule_names(&mut names, &path);
-    }
-    names
-}
-
 /// providerId -> 展示名。优先级:个人配置 > 内置定义 > 旧配置 > 手工兜底;
 /// 都查不到时由调用方回退成原始 id
 pub fn load_provider_names() -> HashMap<String, String> {
@@ -74,7 +47,7 @@ pub fn load_provider_names() -> HashMap<String, String> {
     if let Some(path) = builtin_config_path() {
         merge_rule_names(&mut names, &path);
     }
-    merge_rule_names(&mut names, &personal_config_path());
+    merge_rule_names(&mut names, &provider_config_path());
     merge_legacy_names(&mut names, &config_path());
     names
 }

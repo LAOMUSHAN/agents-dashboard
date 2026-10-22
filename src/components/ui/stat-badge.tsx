@@ -12,7 +12,7 @@ const TONES: Record<BadgeTone, string> = {
   muted: "bg-muted text-muted-foreground border-transparent",
 };
 
-/** 状态徽标:替代旧 .badge ok/err/warn/info,色调语义与旧版一致 */
+/** 状态徽标：按 tone 输出对应色调 */
 export function StatBadge({
   tone,
   children,

@@ -31,7 +31,6 @@ import { InsightCard } from "./components/InsightCard";
 import { LatencyPanel } from "./components/LatencyPanel";
 import { ModelTrendChart } from "./components/ModelTrendChart";
 import { PricingPanel } from "./components/PricingPanel";
-import { ProviderPanel } from "./components/ProviderPanel";
 import { ProviderTable } from "./components/ProviderTable";
 import { ProviderTrendChart } from "./components/ProviderTrendChart";
 import { RequestLog } from "./components/RequestLog";
@@ -91,7 +90,7 @@ const TABS = [
   { value: "breakdown", label: "用量明细", icon: ClipboardList },
   { value: "health", label: "健康与性能", icon: Stethoscope },
   { value: "log", label: "请求日志", icon: ScrollText },
-  { value: "settings", label: "供应商与模型", icon: Settings },
+  { value: "settings", label: "设置", icon: Settings },
 ] as const;
 type Tab = (typeof TABS)[number]["value"];
 const TAB_KEY = "activeTab";
@@ -376,7 +375,7 @@ export default function App() {
     breakdown: "按供应商 / 模型 / 项目拆解",
     health: "错误、延迟与工具调用",
     log: "按会话分组的请求明细",
-    settings: "供应商与模型单价",
+    settings: "模型单价与计费规则",
   };
 
   return (
@@ -513,14 +512,7 @@ export default function App() {
             {tab === "log" && <RequestLog range={range} source={source} />}
 
             {tab === "settings" && (
-              <>
-                <div className="rounded-panel border border-border bg-card px-4 py-3 text-[12px] leading-relaxed text-muted-foreground">
-                  DSH 的供应商与模型在 DSH 设置中管理，本面板只读取用量数据、不写回 DSH 配置；
-                  下面的供应商页仅针对 zcode，模型单价由两个源共享。
-                </div>
-                <ProviderPanel />
-                <PricingPanel range={range} models={models} onSaved={() => setReloadKey((k) => k + 1)} />
-              </>
+              <PricingPanel range={range} models={models} onSaved={() => setReloadKey((k) => k + 1)} />
             )}
           </div>
         </main>

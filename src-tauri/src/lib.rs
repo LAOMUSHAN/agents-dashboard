@@ -1,7 +1,6 @@
 mod db;
 mod dsh;
 mod error;
-mod personal;
 mod pricing;
 mod providers;
 mod queries;
@@ -453,7 +452,6 @@ struct Meta {
     dsh_root: String,
     index_path: String,
     sources: Vec<SourceStatus>,
-    supports_provider_editing: bool,
 }
 
 #[tauri::command]
@@ -474,113 +472,7 @@ fn get_meta(state: tauri::State<AppState>) -> Meta {
         dsh_root,
         index_path,
         sources: state.source_statuses(&stats),
-        supports_provider_editing: true,
     }
-}
-
-// ---------- zcode 供应商配置管理(读写 ~/.zcode/v2/provider_config.json) ----------
-// 每个写命令都返回写后的完整配置,前端直接用响应刷新列表,不必再发一次查询
-
-#[tauri::command]
-fn get_provider_config() -> Result<types::ZProviderConfig, String> {
-    personal::load_default()
-}
-
-#[tauri::command]
-fn set_provider_enabled(id: String, enabled: bool) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| personal::set_enabled(doc, &id, enabled))
-}
-
-#[tauri::command]
-fn set_provider_base_url(id: String, url: Option<String>) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| personal::set_base_url(doc, &id, url))
-}
-
-#[tauri::command]
-fn set_provider_api_key(id: String, key: Option<String>) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| personal::set_api_key(doc, &id, key))
-}
-
-#[tauri::command]
-fn add_provider_model(
-    id: String,
-    model: String,
-    context_limit: Option<i64>,
-    output_limit: Option<i64>,
-    input_image: bool,
-    input_video: bool,
-) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| {
-        personal::add_model(doc, &id, &model, context_limit, output_limit, input_image, input_video)
-    })
-}
-
-#[tauri::command]
-fn remove_provider_model(id: String, model: String) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| personal::remove_model(doc, &id, &model))
-}
-
-#[tauri::command]
-fn set_provider_model_limits(
-    id: String,
-    model: String,
-    context_limit: Option<i64>,
-    output_limit: Option<i64>,
-) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| {
-        personal::set_model_limits(doc, &id, &model, context_limit, output_limit)
-    })
-}
-
-#[tauri::command]
-fn set_provider_model_input_modalities(
-    id: String,
-    model: String,
-    image: bool,
-    video: bool,
-) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| {
-        personal::set_model_input_modalities(doc, &id, &model, image, video)
-    })
-}
-
-/// 从供应商接口拉取可用模型(OpenAI 兼容);网络请求在命令线程上同步执行,10s 超时
-#[tauri::command]
-fn fetch_provider_models(id: String) -> Result<Vec<String>, String> {
-    personal::fetch_remote_models(&id)
-}
-
-#[tauri::command]
-fn add_provider_models(id: String, models: Vec<String>) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| personal::add_models(doc, &id, &models).map(|_| ()))
-}
-
-/// add_provider 的响应:newId 是新生成的供应商 key,前端用它定位并展开新行
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AddProviderResponse {
-    config: types::ZProviderConfig,
-    new_id: String,
-}
-
-#[tauri::command]
-fn add_provider(
-    name: String,
-    kind: String,
-    base_url: Option<String>,
-    api_key: Option<String>,
-) -> Result<AddProviderResponse, String> {
-    let mut new_id = String::new();
-    let config = personal::update_default(|doc| {
-        new_id = personal::add_provider(doc, &name, &kind, base_url, api_key)?;
-        Ok(())
-    })?;
-    Ok(AddProviderResponse { config, new_id })
-}
-
-#[tauri::command]
-fn remove_provider(id: String) -> Result<types::ZProviderConfig, String> {
-    personal::update_default(|doc| personal::remove_provider(doc, &id))
 }
 
 /// 唤醒并聚焦主窗口。
@@ -832,18 +724,6 @@ pub fn run() {
             get_pricing,
             save_pricing,
             estimate_cost,
-            get_provider_config,
-            set_provider_enabled,
-            set_provider_base_url,
-            set_provider_api_key,
-            add_provider_model,
-            remove_provider_model,
-            set_provider_model_limits,
-            set_provider_model_input_modalities,
-            fetch_provider_models,
-            add_provider_models,
-            add_provider,
-            remove_provider,
             get_meta
         ])
         .build(tauri::generate_context!())

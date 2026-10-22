@@ -1,6 +1,6 @@
 [package]
 name = "agents-dashboard"
-version = "0.4.1"
+version = "0.4.2"
 description = "Agents Dashboard —— ZCode 本地用量与费用统计面板"
 license = "MIT"
 edition = "2021"
@@ -15,8 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 serde = { version = "1", features = ["derive"] }
-# preserve_order:改写 zcode 配置时保持原有键顺序,避免整文件被字母序重排
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = "1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 # 单实例保护:多进程并存会各持一份内存配置,保存时互相覆盖(峰谷等设置被旧实例写回)
 tauri-plugin-single-instance = "2"
@@ -24,11 +23,6 @@ chrono = "0.4.45"
 dirs = "6.0.0"
 # DSH 会话日志是多帧 zstd，索引器需要流式解压
 zstd = "0.13"
-# 新增自定义供应商时生成条目 key(zcode 对非 builtin 供应商用 UUID)
-uuid = { version = "1", features = ["v4"] }
-# 拉取供应商可用模型列表用(GET {baseURL}/models);default-tls 走系统证书链,
-# 对各类中转站域名兼容性最好
-reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
