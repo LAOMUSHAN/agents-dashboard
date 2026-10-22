@@ -884,6 +884,17 @@ th.num {
   will-change: transform, opacity;
 }
 
+/* 总览模块拖放落位：落点回弹，沿用 CDS 15 阶弹簧 */
+@keyframes module-settle {
+  0% { transform: scale(0.988); }
+  55% { transform: scale(1.006); }
+  100% { transform: scale(1); }
+}
+.module-settle {
+  animation: module-settle 320ms var(--cds-spring-press);
+  will-change: transform;
+}
+
 /* 滚动渐隐:7 档非线性遮罩,组件通过 --cds-scroll-fade-* 控制高度 */
 .cds-scroll-fade {
   -webkit-mask-image: linear-gradient(

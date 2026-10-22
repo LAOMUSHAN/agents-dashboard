@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   AgentStat,
   ErrorStats,
@@ -29,6 +29,7 @@ import { ErrorPanel } from "./components/ErrorPanel";
 import { InsightCard } from "./components/InsightCard";
 import { LatencyPanel } from "./components/LatencyPanel";
 import { ModelTrendChart } from "./components/ModelTrendChart";
+import { OverviewModulesPanel } from "./components/OverviewModulesPanel";
 import { PricingPanel } from "./components/PricingPanel";
 import { ProviderTable } from "./components/ProviderTable";
 import { ProviderTrendChart } from "./components/ProviderTrendChart";
@@ -41,8 +42,12 @@ import { TrendChart } from "./components/TrendChart";
 import { WasteRankPanel } from "./components/WasteRankPanel";
 import { getThemeMode, setThemeMode, type ThemeMode } from "./theme";
 import {
+  defaultOverviewLayout,
+  normalizeOverviewLayout,
+  type OverviewLayout,
+} from "./overviewModules";
+import {
   ChartNoAxesColumn,
-  ChevronDown,
   ClipboardList,
   Contrast,
   Moon,
@@ -155,8 +160,8 @@ export default function App() {
   const [themeMode, setThemeModeState] = useState<ThemeMode>(getThemeMode);
   const [tab, setTab] = useState<Tab>(getInitialTab);
   const [navCollapsed, setNavCollapsed] = useState<boolean>(getInitialNavCollapsed);
-  // 总览默认只展示结论层,其余分析面板按需展开
-  const [showMore, setShowMore] = useState(false);
+  // 总览模块的顺序与显隐；旧版的「展开更多分析」折叠按钮由设置页取代
+  const [overviewLayout, setOverviewLayout] = useState<OverviewLayout>(() => defaultOverviewLayout());
   const [loading, setLoading] = useState(false);
   // 后端查询失败时把原因留在界面上：以前只 console.error，整页会停在空数据，
   // 看起来像「应用没数据」而不是「查询出错」
@@ -209,6 +214,11 @@ export default function App() {
     savePrefs({ sourceScope: v });
   };
 
+  const updateOverviewLayout = (next: OverviewLayout) => {
+    setOverviewLayout(next);
+    savePrefs({ overviewModules: next });
+  };
+
   // 刷新间隔以配置文件为准（localStorage 只作即时缓存），
   // 修掉 WebView 存储被清理或 dev/release 换源后重启回到 5 秒的问题
   useEffect(() => {
@@ -226,6 +236,7 @@ export default function App() {
           localStorage.setItem(SOURCE_KEY, s);
           setSource(s);
         }
+        setOverviewLayout(normalizeOverviewLayout(prefs.overviewModules));
       })
       .catch(() => undefined);
   }, []);
@@ -371,7 +382,7 @@ export default function App() {
     breakdown: "按供应商 / 模型 / 项目拆解",
     health: "错误、延迟与工具调用",
     log: "按会话分组的请求明细",
-    settings: "模型单价与计费规则",
+    settings: "总览模块与计费规则",
   };
 
   return (
@@ -461,35 +472,72 @@ export default function App() {
               ))}
             {tab === "overview" && (
               <>
-                <InsightCard
-                  summary={summary}
-                  models={models}
-                  providers={providers}
-                  sourceTotals={sourceTotals}
-                />
-                <SummaryCards summary={summary} trend={trend} capabilities={capabilities} source={source} />
-                <TrendChart points={trend} monthly={monthlyTrend} />
-                <button
-                  className="mx-auto inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  onClick={() => setShowMore((v) => !v)}
-                >
-                  {showMore ? "收起更多分析" : "展开更多分析"}
-                  <ChevronDown size={13} className={cn("transition-transform", showMore && "rotate-180")} />
-                </button>
-                {showMore && (
-                  <div className="cds-pop flex flex-col gap-4">
-                    <ModelTrendChart points={modelTrend} />
-                    <ProviderTrendChart points={providerTrend} names={providerNames} />
-                    <ContextComposition summary={summary} tools={tools} />
-                    <ActivityHeatmap
-                      cells={activity}
-                      preset={rangeState.preset}
-                      range={range}
-                      customFrom={rangeState.customFrom}
-                      customTo={rangeState.customTo}
-                    />
-                    <AgentStatsPanel stats={agents} />
-                    <WasteRankPanel projects={projects} models={models} providers={providers} />
+                {overviewLayout.visible.map((id) => {
+                  let node: ReactNode = null;
+                  switch (id) {
+                    case "insight":
+                      node = (
+                        <InsightCard
+                          summary={summary}
+                          models={models}
+                          providers={providers}
+                          sourceTotals={sourceTotals}
+                        />
+                      );
+                      break;
+                    case "summary":
+                      node = <SummaryCards summary={summary} trend={trend} capabilities={capabilities} source={source} />;
+                      break;
+                    case "trend":
+                      node = <TrendChart points={trend} monthly={monthlyTrend} />;
+                      break;
+                    case "modelTrend":
+                      node = <ModelTrendChart points={modelTrend} />;
+                      break;
+                    case "providerTrend":
+                      node = <ProviderTrendChart points={providerTrend} names={providerNames} />;
+                      break;
+                    case "context":
+                      node = <ContextComposition summary={summary} tools={tools} />;
+                      break;
+                    case "activity":
+                      node = (
+                        <ActivityHeatmap
+                          cells={activity}
+                          preset={rangeState.preset}
+                          range={range}
+                          customFrom={rangeState.customFrom}
+                          customTo={rangeState.customTo}
+                        />
+                      );
+                      break;
+                    case "agents":
+                      node = <AgentStatsPanel stats={agents} />;
+                      break;
+                    case "waste":
+                      node = <WasteRankPanel projects={projects} models={models} providers={providers} />;
+                      break;
+                  }
+                  return (
+                    <div key={id} className="contents">
+                      {node}
+                    </div>
+                  );
+                })}
+                {overviewLayout.visible.length === 0 && (
+                  <div className="rounded-panel border border-dashed border-border bg-card/40 px-6 py-10 text-center">
+                    <p className="text-[13px] font-medium text-foreground">总览模块已全部隐藏</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      在「设置 → 总览模块」里把需要的模块拖回展示区。
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => switchTab("settings")}
+                      className="mt-3 inline-flex h-7 items-center gap-1.5 rounded-full border border-border/70 bg-accent/40 px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
+                    >
+                      <Settings size={12} />
+                      去设置
+                    </button>
                   </div>
                 )}
               </>
@@ -513,7 +561,10 @@ export default function App() {
             {tab === "log" && <RequestLog range={range} source={source} />}
 
             {tab === "settings" && (
-              <PricingPanel range={range} models={models} onSaved={() => setReloadKey((k) => k + 1)} />
+              <>
+                <OverviewModulesPanel layout={overviewLayout} onChange={updateOverviewLayout} />
+                <PricingPanel range={range} models={models} onSaved={() => setReloadKey((k) => k + 1)} />
+              </>
             )}
           </div>
         </main>
