@@ -244,8 +244,9 @@ pub fn get_summary(conn: &Connection, range: &Range, pricing_path: &std::path::P
                 r.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 r.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 r.get::<_, Option<i64>>(7)?,
-                r.get::<_, i64>(8)?,
-                r.get::<_, i64>(9)?,
+                // 无 GROUP BY 的聚合在空范围内 SUM 返回 NULL,必须按 Option 读
+                r.get::<_, Option<i64>>(8)?.unwrap_or(0),
+                r.get::<_, Option<i64>>(9)?.unwrap_or(0),
             ))
         },
     )?;

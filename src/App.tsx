@@ -126,6 +126,9 @@ export default function App() {
   // 总览默认只展示结论层,其余分析面板按需展开
   const [showMore, setShowMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  // 后端查询失败时把原因留在界面上：以前只 console.error，整页会停在空数据，
+  // 看起来像「应用没数据」而不是「查询出错」
+  const [loadError, setLoadError] = useState<string | null>(null);
   const themeOpt = THEME_OPTIONS.find((o) => o.value === themeMode);
 
   const switchTab = (t: Tab) => {
@@ -230,9 +233,13 @@ export default function App() {
             setActivity(d.activity);
             setActivityDaily(d.activityDaily);
             setMonthlyTrend(d.monthlyTrend);
+            setLoadError(null);
           })
           .catch((e) => {
-            if (alive && seq === reqSeq.current) console.error("加载仪表盘数据失败", e);
+            if (alive && seq === reqSeq.current) {
+              console.error("加载仪表盘数据失败", e);
+              setLoadError(String(e));
+            }
           })
           .finally(() => {
             if (seq !== reqSeq.current) return;
@@ -351,6 +358,15 @@ export default function App() {
 
         <main className="min-w-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-5 pb-16 pt-5">
+            {loadError && (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-panel border border-danger/25 bg-danger/8 px-4 py-3 text-[12px] leading-relaxed text-danger"
+              >
+                <span className="font-semibold">数据加载失败</span>
+                <span className="min-w-0 break-words text-danger/90">{loadError}</span>
+              </div>
+            )}
             {tab === "overview" && (
               <>
                 <InsightCard summary={summary} models={models} providers={providers} />

@@ -504,6 +504,143 @@ fn open_main(app: &tauri::AppHandle) {
     }
 }
 
+/// WebView2 浏览器进程是否还活着(本进程的直接子进程 msedgewebview2.exe)。
+///
+/// RivaTuner/RTSS 这类 OSD 钩子会把 RTSSHooks64.dll 注入 WebView2 浏览器进程,
+/// 偶发访问冲突把整个浏览器进程打崩(本机 2026-10-21 的 0xC0000005 崩溃转储确认
+/// faulting module 就是 RTSSHooks64.dll)。WebView2 不会自愈,窗口就停在白屏,
+/// 看门狗靠这个探活后重建窗口。
+#[cfg(windows)]
+fn webview2_browser_alive() -> bool {
+    #[repr(C)]
+    struct ProcessEntry32W {
+        dw_size: u32,
+        cnt_usage: u32,
+        th32_process_id: u32,
+        th32_default_heap_id: usize,
+        th32_module_id: u32,
+        cnt_threads: u32,
+        th32_parent_process_id: u32,
+        pc_pri_class_base: i32,
+        dw_flags: u32,
+        sz_exe_file: [u16; 260],
+    }
+    extern "system" {
+        fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> isize;
+        fn Process32FirstW(snapshot: isize, entry: *mut ProcessEntry32W) -> i32;
+        fn Process32NextW(snapshot: isize, entry: *mut ProcessEntry32W) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
+    const TH32CS_SNAPPROCESS: u32 = 0x2;
+    let me = std::process::id();
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == -1 {
+            // 拿不到快照时按活着处理,避免误重建
+            return true;
+        }
+        let mut entry: ProcessEntry32W = std::mem::zeroed();
+        entry.dw_size = std::mem::size_of::<ProcessEntry32W>() as u32;
+        let mut alive = false;
+        if Process32FirstW(snapshot, &mut entry) != 0 {
+            loop {
+                if entry.th32_parent_process_id == me {
+                    let name = String::from_utf16_lossy(&entry.sz_exe_file);
+                    if name.trim_end_matches('\0').eq_ignore_ascii_case("msedgewebview2.exe") {
+                        alive = true;
+                        break;
+                    }
+                }
+                if Process32NextW(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snapshot);
+        alive
+    }
+}
+
+#[cfg(not(windows))]
+fn webview2_browser_alive() -> bool {
+    true
+}
+
+/// WebView2 浏览器进程崩溃后,进程内的 WebView2 环境已经死了,原地重建窗口
+/// 拿不到新的浏览器进程(实测只得到一个白窗口),只能重启整个进程。
+/// 重启前记一笔到配置目录,5 分钟内最多自动重启 2 次,避免崩溃循环里反复闪窗。
+fn relaunch_after_crash(app: &tauri::AppHandle) {
+    let marker = app
+        .path()
+        .app_config_dir()
+        .map(|d| d.join("watchdog-restarts.json"))
+        .ok();
+    if let Some(path) = &marker {
+        let now = now_secs();
+        let mut recent: Vec<u64> = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        recent.retain(|t| now.saturating_sub(*t) < 300);
+        if recent.len() >= 3 {
+            // 连续崩溃时不再重启,留给用户手动处理(或去排除 RTSS 注入)
+            return;
+        }
+        recent.push(now);
+        let _ = std::fs::write(path, serde_json::to_string(&recent).unwrap_or_default());
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        // 新实例自己会等 1.2s(main.rs 的 --relaunch-wait),避开单实例锁的释放窗口
+        let _ = std::process::Command::new(&exe).arg("--relaunch-wait").spawn();
+    }
+    std::process::exit(0);
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 白屏看门狗:每 2s 探一次 WebView2 浏览器进程。启动给 12s 宽限;
+/// 运行中进程消失超过 2s 且主窗口可见,就自动重启进程恢复界面。
+fn spawn_webview_watchdog(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        let mut seen = false;
+        let mut missing_since: Option<std::time::Instant> = None;
+        let mut last_recover: Option<std::time::Instant> = None;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if webview2_browser_alive() {
+                seen = true;
+                missing_since = None;
+                continue;
+            }
+            if !seen && start.elapsed() < std::time::Duration::from_secs(12) {
+                continue;
+            }
+            let visible = app
+                .get_webview_window("main")
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(true);
+            if !visible {
+                continue;
+            }
+            let since = *missing_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() < std::time::Duration::from_secs(2) {
+                continue;
+            }
+            if last_recover.map_or(true, |t| t.elapsed() > std::time::Duration::from_secs(120)) {
+                last_recover = Some(std::time::Instant::now());
+                missing_since = None;
+                relaunch_after_crash(&app);
+            }
+        }
+    });
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(
@@ -564,6 +701,8 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+            // WebView2 浏览器进程被 OSD 钩子打崩时窗口会停在白屏,看门狗负责重建
+            spawn_webview_watchdog(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
