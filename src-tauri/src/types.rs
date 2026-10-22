@@ -461,15 +461,6 @@ pub struct HeatCell {
     pub calls: i64,
 }
 
-/// 按天活跃点(12 月日历用);day 格式 "YYYY-MM-DD",含全部状态
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DailyActivityPoint {
-    pub day: String,
-    pub calls: i64,
-    pub output_tokens: i64,
-}
-
 /// 月粒度趋势点;bucket 格式 "YYYY-MM"
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -486,7 +477,7 @@ pub struct MonthPoint {
 }
 
 /// 仪表盘一次性返回的全部数据：一次 IPC、一个数据库快照，
-/// 避免 14 个命令各查一遍导致同一屏里的数字来自不同时刻。
+/// 避免 13 个命令各查一遍导致同一屏里的数字来自不同时刻。
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardPayload {
@@ -502,7 +493,6 @@ pub struct DashboardPayload {
     pub errors: ErrorStats,
     pub latency: Vec<LatencyStat>,
     pub activity: Vec<HeatCell>,
-    pub activity_daily: Vec<DailyActivityPoint>,
     pub monthly_trend: Vec<MonthPoint>,
     /// 各数据源的可用性 / 新鲜度；某个源不可用时前端置灰并提示
     pub sources: Vec<SourceStatus>,

@@ -280,7 +280,6 @@ export interface DashboardPayload {
   errors: ErrorStats;
   latency: LatencyStat[];
   activity: HeatCell[];
-  activityDaily: DailyActivityPoint[];
   monthlyTrend: MonthPoint[];
   /** 各数据源状态；某源不可用时前端置灰并提示 */
   sources: SourceStatus[];
@@ -366,13 +365,6 @@ export interface HeatCell {
   /** 0-23,本地时间 */
   hour: number;
   calls: number;
-}
-
-/** 按天活跃点(12 月日历用);day 格式 "YYYY-MM-DD",含全部状态 */
-export interface DailyActivityPoint {
-  day: string;
-  calls: number;
-  outputTokens: number;
 }
 
 /** 月粒度趋势点;bucket 格式 "YYYY-MM" */

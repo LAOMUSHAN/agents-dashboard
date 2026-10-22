@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentStat,
-  DailyActivityPoint,
   ErrorStats,
   HeatCell,
   LatencyStat,
@@ -40,7 +39,6 @@ import { TitleBar } from "./components/TitleBar";
 import { ToolStatsPanel } from "./components/ToolStatsPanel";
 import { TrendChart } from "./components/TrendChart";
 import { WasteRankPanel } from "./components/WasteRankPanel";
-import { YearCalendar } from "./components/YearCalendar";
 import { getThemeMode, setThemeMode, type ThemeMode } from "./theme";
 import {
   ChartNoAxesColumn,
@@ -146,7 +144,6 @@ export default function App() {
   const [errors, setErrors] = useState<ErrorStats | null>(null);
   const [latency, setLatency] = useState<LatencyStat[]>([]);
   const [activity, setActivity] = useState<HeatCell[]>([]);
-  const [activityDaily, setActivityDaily] = useState<DailyActivityPoint[]>([]);
   const [monthlyTrend, setMonthlyTrend] = useState<MonthPoint[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
   const [refreshSec, setRefreshSecState] = useState<number>(getRefreshSec);
@@ -308,7 +305,6 @@ export default function App() {
             setErrors(d.errors);
             setLatency(d.latency);
             setActivity(d.activity);
-            setActivityDaily(d.activityDaily);
             setMonthlyTrend(d.monthlyTrend);
             setSources(d.sources);
             setCapabilities(d.capabilities);
@@ -492,7 +488,6 @@ export default function App() {
                       customFrom={rangeState.customFrom}
                       customTo={rangeState.customTo}
                     />
-                    <YearCalendar points={activityDaily} />
                     <AgentStatsPanel stats={agents} />
                     <WasteRankPanel projects={projects} models={models} providers={providers} />
                   </div>

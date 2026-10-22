@@ -6,10 +6,11 @@ import {
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { CalendarDays, X } from "lucide-react";
+import { CalendarDays, ChevronDown, X } from "lucide-react";
 import type { HeatCell } from "../../shared/types";
 import type { Range } from "../api";
 import { fmtNumber } from "../format";
+import { barScale } from "./ui/data-viz";
 import { Panel } from "./ui/panel";
 import { Segmented } from "./ui/segmented";
 import { cn } from "@/lib/utils";
@@ -46,11 +47,11 @@ const DOW_FULL = ["周日", "周一", "周二", "周三", "周四", "周五", "�
 /** 长期范围按星期聚合时用周一开头，符合中文日历习惯 */
 const MONDAY_FIRST = [1, 2, 3, 4, 5, 6, 0];
 const LEVELS = ["bg-muted/45", "bg-clay/30", "bg-clay/50", "bg-clay/75", "bg-clay"];
-const GRID_COLS = "84px repeat(24, minmax(0, 1fr)) 54px";
+const GRID_COLS = "84px repeat(24, minmax(0, 1fr)) 72px 54px";
 const DAY_MS = 86_400_000;
 const LONG_VIEW_OPTIONS = [
-  { value: "weekdays", label: "按星期" },
   { value: "dates", label: "按日期" },
+  { value: "weekdays", label: "按星期" },
 ] as const;
 
 function startOfDay(d: Date): Date {
@@ -287,6 +288,21 @@ function HeatCellButton({
   );
 }
 
+function VolumeBar({ value, max, delay = 0 }: { value: number; max: number; delay?: number }) {
+  // 与「用量明细 / 请求日志」同一套 barScale(asinh) 压缩；标尺取当前可见行的最大值
+  const pct = value > 0 && max > 0 ? barScale(value, max) * 100 : 0;
+  return (
+    <div className="flex h-full items-center pr-1" aria-hidden>
+      <span className="relative block h-1.5 w-full overflow-hidden rounded-full bg-accent/70">
+        <span
+          className="heat-volume absolute inset-y-0 left-0 rounded-full bg-clay"
+          style={{ width: `${pct}%`, animationDelay: `${delay}ms` }}
+        />
+      </span>
+    </div>
+  );
+}
+
 function Empty({ label }: { label: string }) {
   return (
     <div className="flex flex-col items-center gap-2 px-2 py-10 text-center">
@@ -316,7 +332,8 @@ export function ActivityHeatmap({
   const todayKey = dayKey(today);
   const yesterdayKey = dayKey(addDays(today, -1));
   const cellDays = useMemo(() => [...new Set(cells.map((c) => c.day))].sort(), [cells]);
-  const [longView, setLongView] = useState<"weekdays" | "dates">("weekdays");
+  const [longView, setLongView] = useState<"weekdays" | "dates">("dates");
+  const [visibleDays, setVisibleDays] = useState(7);
 
   const win = useMemo<{ mode: Mode; keys: string[]; label: string; longRange: boolean }>(() => {
     const plain = (mode: Mode, keys: string[], label: string) => ({ mode, keys, label, longRange: false });
@@ -365,6 +382,13 @@ export function ActivityHeatmap({
     }
   }, [preset, range.from, range.to, customFrom, customTo, cellDays, today, todayKey, yesterdayKey, longView]);
 
+  const totalDays = win.keys.length;
+  const shownKeys = useMemo(() => {
+    if (win.mode !== "dates") return win.keys;
+    return win.keys.length > visibleDays ? win.keys.slice(-visibleDays) : win.keys;
+  }, [win, visibleDays]);
+  const activeKeys = win.mode === "dates" ? shownKeys : win.keys;
+
   const agg = useMemo(() => {
     const dayMap = new Map<string, number[]>();
     const dowMap = Array.from({ length: 7 }, () => Array<number>(24).fill(0));
@@ -377,7 +401,7 @@ export function ActivityHeatmap({
         if (c.calls > 0) active.add(c.day);
       }
     } else {
-      for (const key of win.keys) dayMap.set(key, Array<number>(24).fill(0));
+      for (const key of activeKeys) dayMap.set(key, Array<number>(24).fill(0));
       for (const c of cells) {
         const row = dayMap.get(c.day);
         if (!row || c.hour < 0 || c.hour > 23) continue;
@@ -439,7 +463,19 @@ export function ActivityHeatmap({
       dowTotals,
       mostActive,
     };
-  }, [cells, win]);
+  }, [cells, win, shownKeys]);
+
+  // 调用量条沿用 tokens 条的页面级标尺：取整个所选范围的最大日调用量，
+  // 展开/收起时同一天的条长不跳变。
+  const barMax = useMemo(() => {
+    if (win.mode === "weekdays") return Math.max(...agg.dowTotals, 0);
+    const inRange = new Set(win.keys);
+    const totals = new Map<string, number>();
+    for (const c of cells) {
+      if (inRange.has(c.day)) totals.set(c.day, (totals.get(c.day) ?? 0) + c.calls);
+    }
+    return Math.max(...totals.values(), 0);
+  }, [cells, win, agg.dowTotals]);
 
   const level = (calls: number) =>
     calls <= 0 || agg.maxCell <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((calls / agg.maxCell) * 4)));
@@ -448,11 +484,12 @@ export function ActivityHeatmap({
   const [hover, setHover] = useState<CellTip | null>(null);
   const [pinned, setPinned] = useState<CellTip | null>(null);
 
-  // 切换范围后旧的锚点已失效，收起浮层并回到默认的星期视图
+  // 切换范围后旧的锚点已失效，收起浮层并回到默认的日期视图
   useEffect(() => {
     setHover(null);
     setPinned(null);
-    setLongView("weekdays");
+    setLongView("dates");
+    setVisibleDays(7);
   }, [preset, range.from, range.to, customFrom, customTo]);
 
   const makeTip = (
@@ -557,9 +594,18 @@ export function ActivityHeatmap({
     shareLabel: "占区间",
   });
 
-  const hasData = cells.length > 0 && agg.total > 0;
-  const rowH = win.mode === "weekdays" ? 18 : win.keys.length > 20 ? 15 : 18;
+  const hasData = cells.length > 0 && win.keys.length > 0 && (win.mode !== "single" || agg.total > 0);
+  const rowH = win.mode === "weekdays" ? 18 : shownKeys.length > 20 ? 15 : 18;
   const dayHours = win.mode === "single" ? agg.dayMap.get(win.keys[0]) ?? Array<number>(24).fill(0) : [];
+  const nextVisible = visibleDays < 30 ? Math.min(30, totalDays) : Math.min(totalDays, visibleDays + 30);
+  const nextLabel =
+    visibleDays < 30
+      ? `展开到 ${nextVisible} 天`
+      : totalDays - visibleDays <= 30
+        ? `展开剩余 ${totalDays - visibleDays} 天`
+        : "再展开 30 天";
+  const expandNext = () =>
+    setVisibleDays((v) => (v < 30 ? Math.min(30, totalDays) : Math.min(totalDays, v + 30)));
 
   return (
     <Panel
@@ -590,7 +636,11 @@ export function ActivityHeatmap({
         ) : (
           <>
             <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1.5 px-1 pb-2.5">
-              <Metric label="调用" value={fmtNumber(agg.total)} />
+              <Metric
+                label="调用"
+                value={fmtNumber(agg.total)}
+                hint={win.mode === "dates" && shownKeys.length < totalDays ? `近 ${shownKeys.length} 天` : undefined}
+              />
               {agg.peakHour >= 0 && (
                 <Metric label="峰值" value={`${pad2(agg.peakHour)}:00`} hint={`${fmtNumber(agg.maxHour)} 次`} />
               )}
@@ -609,6 +659,37 @@ export function ActivityHeatmap({
                 </>
               )}
             </div>
+
+            {win.mode === "dates" && totalDays > 7 && (
+              <div className="flex items-center justify-between gap-3 px-1 pb-1.5 text-[10px] text-muted-foreground">
+                <span>
+                  {shownKeys.length < totalDays
+                    ? `最近 ${shownKeys.length} 天 · 共 ${totalDays} 天`
+                    : `已显示全部 ${totalDays} 天`}
+                </span>
+                {shownKeys.length < totalDays && (
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={expandNext}
+                      className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-accent/50 px-2 py-0.5 font-medium text-foreground transition-colors hover:bg-accent"
+                    >
+                      {nextLabel}
+                      <ChevronDown size={11} />
+                    </button>
+                    {totalDays > 30 && (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleDays(totalDays)}
+                        className="text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
+                      >
+                        全部展开
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {win.mode === "single" ? (
               <div className="mt-1">
@@ -675,11 +756,12 @@ export function ActivityHeatmap({
                           {h % 3 === 0 ? pad2(h) : ""}
                         </span>
                       ))}
-                      <span className="text-right text-[9.5px] text-muted-foreground">合计</span>
+                      <span className="pl-0.5 text-[9.5px] text-muted-foreground">分布</span>
+                      <span className="text-right text-[9.5px] text-muted-foreground">调用量</span>
                     </div>
 
                     {win.mode === "weekdays"
-                      ? MONDAY_FIRST.map((dow) => {
+                      ? MONDAY_FIRST.map((dow, rowIndex) => {
                           const row = agg.dowMap[dow];
                           const dowTotal = agg.dowTotals[dow] ?? 0;
                           return (
@@ -706,6 +788,7 @@ export function ActivityHeatmap({
                                   />
                                 );
                               })}
+                              <VolumeBar value={dowTotal} max={barMax} delay={rowIndex * 16} />
                               <span
                                 className={cn(
                                   "text-right text-[10px] tabular-nums",
@@ -717,7 +800,7 @@ export function ActivityHeatmap({
                             </div>
                           );
                         })
-                      : win.keys.map((key) => {
+                      : shownKeys.map((key, rowIndex) => {
                           const hours = agg.dayMap.get(key) ?? Array<number>(24).fill(0);
                           const dayTotal = agg.dayTotals.get(key) ?? 0;
                           const isToday = key === todayKey;
@@ -754,6 +837,7 @@ export function ActivityHeatmap({
                                   />
                                 );
                               })}
+                              <VolumeBar value={dayTotal} max={barMax} delay={rowIndex * 16} />
                               <span
                                 className={cn(
                                   "text-right text-[10px] tabular-nums",
@@ -799,6 +883,7 @@ export function ActivityHeatmap({
                           </button>
                         );
                       })}
+                      <span aria-hidden />
                       <span className="text-right text-[10.5px] font-semibold tabular-nums text-foreground">
                         {fmtNumber(agg.total)}
                       </span>

@@ -1546,35 +1546,6 @@ pub fn get_activity_heatmap(conn: &Connection, range: &Range) -> rusqlite::Resul
     Ok(rows)
 }
 
-/// 按天活跃(12 月日历用):日期 + 调用次数 + 输出 tokens,含所有状态(反映活跃度而非成功量)
-pub fn get_activity_daily(conn: &Connection, range: &Range) -> rusqlite::Result<Vec<DailyActivityPoint>> {
-    let (conds, params) = range_conds("mu.started_at", range);
-    let where_sql = if conds.is_empty() {
-        String::new()
-    } else {
-        format!("WHERE {}", conds.join(" AND "))
-    };
-    query_rows(
-        conn,
-        &format!(
-            "SELECT date(mu.started_at/1000, 'unixepoch', 'localtime') AS day,
-                    COUNT(*) AS calls,
-                    SUM(mu.output_tokens) AS outputTokens
-             FROM model_usage mu {where_sql}
-             GROUP BY day
-             ORDER BY day"
-        ),
-        &params,
-        |r| {
-            Ok(DailyActivityPoint {
-                day: r.get(0)?,
-                calls: r.get(1)?,
-                output_tokens: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
-            })
-        },
-    )
-}
-
 /// 月粒度趋势:月分桶 + 按模型折算费用,模式同 get_trend(含两种加权速度)
 pub fn get_monthly_trend(conn: &Connection, range: &Range, pricing_path: &std::path::Path) -> rusqlite::Result<Vec<MonthPoint>> {
     let (rows, _params) = bucket_model_rows(

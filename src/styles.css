@@ -942,6 +942,14 @@ th.num {
   transform-origin: bottom;
   animation: heat-bar-in 460ms var(--cds-ease-out-expo) both;
 }
+@keyframes heat-volume-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.heat-volume {
+  transform-origin: left;
+  animation: heat-volume-grow 520ms var(--cds-ease-out-expo) both;
+}
 .heat-cell {
   transition:
     transform 150ms var(--cds-ease-out-expo),

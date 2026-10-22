@@ -106,7 +106,7 @@ impl Inner {
     }
 
     /// 一次查询返回仪表盘需要的全部数据；同步实现，由命令层放到阻塞线程池执行。
-    /// 14 条查询各自独立只读连接并行跑；连接由统一查询层创建（视图已按 source 过滤）。
+    /// 13 条查询各自独立只读连接并行跑；连接由统一查询层创建（视图已按 source 过滤）。
     fn query_dashboard(
         &self,
         range: &types::Range,
@@ -115,15 +115,15 @@ impl Inner {
         let dsh_stats = self.ensure_dsh(false);
         let p = &self.pricing_path;
         let names = self.provider_names();
-        let mut conns = Vec::with_capacity(14);
-        for _ in 0..14 {
+        let mut conns = Vec::with_capacity(13);
+        for _ in 0..13 {
             conns.push(self.query_conn(filter)?);
         }
         // 每条查询独占一个连接：Connection 不是 Sync，必须 move 进各自线程
-        let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13] =
-            <[rusqlite::Connection; 14]>::try_from(conns).expect("连接数固定为 14");
+        let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12] =
+            <[rusqlite::Connection; 13]>::try_from(conns).expect("连接数固定为 13");
 
-        let (summary, trend, model_trend, provider_trend, models, projects, providers, tools, agents, errors, latency, activity, activity_daily, monthly_trend) =
+        let (summary, trend, model_trend, provider_trend, models, projects, providers, tools, agents, errors, latency, activity, monthly_trend) =
             std::thread::scope(|s| -> Result<_, AppError> {
                 let summary = s.spawn(move || queries::get_summary(&c0, range, p));
                 let trend = s.spawn(move || queries::get_trend(&c1, range, p));
@@ -137,8 +137,7 @@ impl Inner {
                 let errors = s.spawn(move || queries::get_error_stats(&c9, range));
                 let latency = s.spawn(move || queries::get_latency_stats(&c10, range));
                 let activity = s.spawn(move || queries::get_activity_heatmap(&c11, range));
-                let activity_daily = s.spawn(move || queries::get_activity_daily(&c12, range));
-                let monthly_trend = s.spawn(move || queries::get_monthly_trend(&c13, range, p));
+                let monthly_trend = s.spawn(move || queries::get_monthly_trend(&c12, range, p));
 
                 Ok((
                     join_query("summary", summary.join())?,
@@ -153,7 +152,6 @@ impl Inner {
                     join_query("errors", errors.join())?,
                     join_query("latency", latency.join())?,
                     join_query("activity", activity.join())?,
-                    join_query("activity_daily", activity_daily.join())?,
                     join_query("monthly_trend", monthly_trend.join())?,
                 ))
             })?;
@@ -171,7 +169,6 @@ impl Inner {
             errors,
             latency,
             activity,
-            activity_daily,
             monthly_trend,
             sources: self.source_statuses(&dsh_stats),
             capabilities: if filter.includes(sources::SourceId::Dsh) {
@@ -198,7 +195,7 @@ fn join_query<T>(
         .and_then(|v| v.map_err(AppError::from))
 }
 
-/// 一次刷新只走一个命令：14 个查询在同一个阻塞任务里跑完，避免 14 次 IPC 往返。
+/// 一次刷新只走一个命令：13 个查询在同一个阻塞任务里跑完，避免 13 次 IPC 往返。
 #[tauri::command]
 async fn get_dashboard(
     state: tauri::State<'_, AppState>,
@@ -261,12 +258,6 @@ async fn get_models(
 fn get_agents(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::AgentStat>, String> {
     let conn = state.conn()?;
     queries::get_agent_stats(&conn, &range).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn get_activity_daily(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::DailyActivityPoint>, String> {
-    let conn = state.conn()?;
-    queries::get_activity_daily(&conn, &range).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -710,7 +701,6 @@ pub fn run() {
             get_trend_by_provider,
             get_models,
             get_agents,
-            get_activity_daily,
             get_monthly_trend,
             get_projects,
             get_providers,
