@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// 索引库 schema 版本。DSH 数据只是缓存，版本不符时整库重建。
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
 /// 增量刷新单次时间预算；超过就把剩余文件留给下一次刷新。
 const DEFAULT_BUDGET_MS: u64 = 250;
 
@@ -105,6 +105,8 @@ struct Failure {
 struct StepAcc {
     start: i64,
     end: Option<i64>,
+    /// step/end 的时间；工具结果必须早于它，晚到的就是恢复时补发的旧结果
+    step_end: Option<i64>,
     message_time: Option<i64>,
     first_chunk: Option<i64>,
     has_message: bool,
@@ -119,9 +121,13 @@ struct StepAcc {
 struct ToolAcc {
     call_id: String,
     name: String,
+    turn: i64,
+    step: i64,
     start: i64,
     end: Option<i64>,
     is_error: bool,
+    /// result 是否到达（即使耗时超上限被置空，也说明调用已结束）
+    result_seen: bool,
 }
 
 struct ModelRow {
@@ -727,6 +733,7 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
                 steps.entry((turn, step)).or_insert(StepAcc {
                     start: time,
                     end: None,
+                    step_end: None,
                     message_time: None,
                     first_chunk: None,
                     has_message: false,
@@ -742,6 +749,7 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
                 let turn = data.and_then(|d| d.get("turn")).and_then(Value::as_i64).unwrap_or(0);
                 let step = data.and_then(|d| d.get("step")).and_then(Value::as_i64).unwrap_or(0);
                 if let Some(s) = steps.get_mut(&(turn, step)) {
+                    s.step_end = Some(time);
                     if s.end.is_none() {
                         s.end = Some(time);
                     }
@@ -760,6 +768,9 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
                     if *t == turn && s.end.is_none() {
                         s.end = Some(time);
                     }
+                    if *t == turn && s.step_end.is_none() {
+                        s.step_end = Some(time);
+                    }
                 }
             }
             "assistant/message" => {
@@ -768,6 +779,7 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
                 let s = steps.entry((turn, step)).or_insert(StepAcc {
                     start: time,
                     end: None,
+                    step_end: None,
                     message_time: None,
                     first_chunk: None,
                     has_message: false,
@@ -843,9 +855,12 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
                 tools.entry(call_id.to_string()).or_insert(ToolAcc {
                     call_id: call_id.to_string(),
                     name,
+                    turn: data.and_then(|d| d.get("turn")).and_then(Value::as_i64).unwrap_or(0),
+                    step: data.and_then(|d| d.get("step")).and_then(Value::as_i64).unwrap_or(0),
                     start: time,
                     end: None,
                     is_error: false,
+                    result_seen: false,
                 });
             }
             "tool/result" => {
@@ -864,7 +879,13 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
                     })
                     .unwrap_or("");
                 if let Some(t) = tools.get_mut(call_id) {
-                    t.end = Some(time);
+                    t.result_seen = true;
+                    // 会话隔天恢复时，DSH 会给旧的 pending 调用补一条 result，
+                    // 这条 result 的 time 是恢复时间而非实际完成时间；超过 1 小时的
+                    // 「耗时」只会污染工具统计，按未知处理。
+                    if time.saturating_sub(t.start) <= 3_600_000 {
+                        t.end = Some(time);
+                    }
                     t.is_error = data
                         .and_then(|d| d.get("message"))
                         .and_then(|m| m.get("content"))
@@ -1018,23 +1039,23 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
         .any(|r| r == "aborted" || r == "interrupted");
     let mut tool_rows = Vec::with_capacity(tools.len());
     for t in tools.values() {
-        let status = match t.end {
-            Some(_) => {
-                if t.is_error {
-                    "error"
-                } else {
-                    "completed"
-                }
-            }
-            None => {
-                if any_cancelled {
-                    "cancelled"
-                } else {
-                    "error"
-                }
-            }
+        // step/end 一定在工具结果之后；result 晚于它，说明是会话恢复时补发的旧结果，
+        // 时间差不是真实耗时。
+        let step_done = steps.get(&(t.turn, t.step)).and_then(|s| s.step_end);
+        let end = match (t.end, step_done) {
+            (Some(e), Some(done)) if e > done => None,
+            (e, _) => e,
         };
-        let duration = t.end.and_then(|e| if e > t.start { Some(e - t.start) } else { None });
+        let status = if t.is_error {
+            "error"
+        } else if t.result_seen || end.is_some() {
+            "completed"
+        } else if any_cancelled {
+            "cancelled"
+        } else {
+            "error"
+        };
+        let duration = end.and_then(|e| if e > t.start { Some(e - t.start) } else { None });
         tool_rows.push(ToolRow {
             id: format!("{id}:{}", t.call_id),
             session_id: id.clone(),
@@ -1042,7 +1063,7 @@ fn parse_session_file(path: &Path) -> Result<ParsedSession, AppError> {
             tool_name: t.name.clone(),
             status: status.to_string(),
             started_at: t.start,
-            completed_at: t.end,
+            completed_at: end,
             duration_ms: duration,
         });
     }
@@ -1106,11 +1127,14 @@ mod tests {
             r#"{"type":"step/start","time":1100,"data":{"turn":1,"step":1}}"#,
             r#"{"type":"assistant/chunk","time":1150,"data":{"turn":1,"step":1,"chunk":{"type":"text-delta","text":"hi"}}}"#,
             r#"{"type":"tool/call","time":1200,"data":{"turn":1,"step":1,"callId":"c1","name":"read"}}"#,
+            r#"{"type":"tool/call","time":1250,"data":{"turn":1,"step":1,"callId":"c2","name":"pwsh"}}"#,
         ]
         .join("\n")
             + "\n";
         let frame2 = [
             r#"{"type":"tool/result","time":1300,"data":{"turn":1,"step":1,"message":{"source":{"kind":"tool","callId":"c1"},"content":[{"type":"tool-result","toolCallId":"c1","isError":false}]}}}"#,
+            // 隔天恢复：result 的 time 是恢复时间，不能当真实耗时
+            r#"{"type":"tool/result","time":7201250,"data":{"turn":1,"step":1,"message":{"source":{"kind":"tool","callId":"c2"},"content":[{"type":"tool-result","toolCallId":"c2","isError":false}]}}}"#,
             r#"{"type":"assistant/message","time":1500,"data":{"turn":1,"step":1,"message":{"source":{"provider":"p","model":"m"}},"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":50,"cacheWriteTokens":5}}}"#,
             r#"{"type":"step/start","time":1600,"data":{"turn":1,"step":2}}"#,
             r#"{"type":"llm/retry","time":1650,"data":{"turn":1,"step":2,"failure":{"code":"RATE_LIMIT","message":"429"}}}"#,
@@ -1129,7 +1153,7 @@ mod tests {
         assert!(stats.available);
         assert_eq!(stats.sessions, 1);
         assert_eq!(stats.requests, 2);
-        assert_eq!(stats.tools, 1);
+        assert_eq!(stats.tools, 2);
 
         let conn = Connection::open(dir.join("index.sqlite")).unwrap();
         let (status, input, output, cr, cw, ttft, dur): (String, i64, i64, i64, i64, i64, i64) = conn
@@ -1164,10 +1188,25 @@ mod tests {
         assert_eq!(task_type, "interactive");
 
         let (tool_status, tool_dur): (String, i64) = conn
-            .query_row("SELECT status,duration_ms FROM dsh_tool_usage", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row(
+                "SELECT status,duration_ms FROM dsh_tool_usage WHERE tool_call_id='c1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(tool_status, "completed");
         assert_eq!(tool_dur, 100);
+
+        // 2 小时后的 result：耗时按未知处理，不污染平均/最大耗时
+        let (stale_status, stale_dur): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT status,duration_ms FROM dsh_tool_usage WHERE tool_call_id='c2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stale_status, "completed");
+        assert_eq!(stale_dur, None);
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1210,6 +1249,14 @@ mod tests {
                 .unwrap();
             it.collect::<rusqlite::Result<Vec<_>>>().unwrap()
         };
+
+        let max_tool_ms: Option<i64> = conn
+            .query_row("SELECT MAX(duration_ms) FROM dsh_tool_usage", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            max_tool_ms.unwrap_or(0) <= 3_600_000,
+            "工具耗时仍有超过 1 小时的异常值: {max_tool_ms:?}"
+        );
 
         let home = dirs::home_dir().unwrap();
         let cache_dir = home.join(".dsh/storages/session_projcache/sessions");
