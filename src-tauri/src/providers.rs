@@ -124,3 +124,100 @@ fn merge_legacy_names(names: &mut HashMap<String, String>, path: &PathBuf) {
         }
     }
 }
+
+/// DSH 的供应商定义在 `~/.dsh/profiles/<profile>/cordis.patch.yml` 的
+/// `config.providers.<key>.displayName`。usage 里记录的是这个 key（如 workbuddy），
+/// 这里做一个轻量 YAML 行解析，避免为几个展示名引入完整 YAML 依赖。
+pub fn load_dsh_provider_names() -> HashMap<String, String> {
+    let mut names = HashMap::new();
+    let profiles = dsh_profiles_dir();
+    let desktop = profiles.join("desktop/cordis.patch.yml");
+    let mut files: Vec<PathBuf> = if desktop.exists() {
+        vec![desktop]
+    } else {
+        let Ok(entries) = std::fs::read_dir(&profiles) else {
+            return names;
+        };
+        entries
+            .flatten()
+            .map(|e| e.path().join("cordis.patch.yml"))
+            .filter(|p| p.exists())
+            .collect()
+    };
+    files.sort();
+    for path in files {
+        parse_dsh_provider_names(&path, &mut names);
+    }
+    names
+}
+
+fn dsh_profiles_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("DSH_PROFILES_DIR") {
+        return PathBuf::from(p);
+    }
+    if let Ok(p) = std::env::var("DSH_HOME") {
+        return PathBuf::from(p).join("profiles");
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".dsh/profiles")
+}
+
+fn parse_dsh_provider_names(path: &PathBuf, out: &mut HashMap<String, String>) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let mut in_providers = false;
+    let mut provider_indent: Option<usize> = None;
+    let mut last_key: Option<String> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if trimmed == "providers:" {
+            in_providers = true;
+            provider_indent = None;
+            last_key = None;
+            continue;
+        }
+        if !in_providers {
+            continue;
+        }
+        // 回到与 providers 同级或更浅的键，说明这一段结束
+        if indent <= 4 && trimmed.ends_with(':') {
+            in_providers = false;
+            continue;
+        }
+        if let Some(key) = trimmed.strip_suffix(':') {
+            if !key.contains(' ') {
+                if provider_indent.is_none() {
+                    provider_indent = Some(indent);
+                }
+                if Some(indent) == provider_indent {
+                    let key = key.trim().trim_matches('"').trim_matches('\'').to_string();
+                    // 先登记原始 key，displayName 再覆盖
+                    out.entry(key.clone()).or_insert_with(|| key.clone());
+                    last_key = Some(key);
+                    continue;
+                }
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("displayName:") {
+            if let Some(key) = &last_key {
+                let name = rest
+                    .split(" #")
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string();
+                if !name.is_empty() {
+                    out.insert(key.clone(), name);
+                }
+            }
+        }
+    }
+}
+

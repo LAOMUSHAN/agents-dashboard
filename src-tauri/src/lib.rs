@@ -1,4 +1,5 @@
 mod db;
+mod dsh;
 mod error;
 mod personal;
 mod pricing;
@@ -6,10 +7,12 @@ mod providers;
 mod queries;
 mod sources;
 mod types;
+mod unified;
 
 use error::AppError;
-use sources::DataSource;
 use serde::Serialize;
+use sources::{SourceFilter, SourceStatus};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
@@ -18,10 +21,12 @@ use tauri::Manager;
 
 /// 进程内共享状态；命令与后台任务都拿 Arc<Inner>，避免跨线程移动 MutexGuard。
 pub struct Inner {
-    /// 数据源抽象：目前只有 zcode，DSH 在 P6 接入
-    source: Box<dyn sources::DataSource>,
-    /// 只读连接;打开失败(如库不存在)时为 None,命令返回带路径的错误信息
-    db: Mutex<Option<rusqlite::Connection>>,
+    /// zcode 只读库路径；不存在时统一查询层用空表顶上
+    zcode_path: PathBuf,
+    /// DSH 索引库（可重建的缓存）；只在运行期由查询触发更新
+    index_path: PathBuf,
+    /// DSH 索引器；Mutex 保证同一时刻只有一个刷新在跑
+    dsh: Mutex<dsh::DshIndexer>,
     pricing_path: PathBuf,
 }
 
@@ -37,24 +42,74 @@ impl std::ops::Deref for AppState {
     }
 }
 
+impl AppState {
+    /// 单源查询连接（旧的逐项命令用；主面板走 get_dashboard）。
+    /// 每次调用前补一次 DSH 增量；索引器内部有 10 秒节流，不会反复扫盘。
+    fn conn(&self) -> Result<rusqlite::Connection, String> {
+        self.ensure_dsh(false);
+        self.query_conn(SourceFilter::All).map_err(|e| e.to_string())
+    }
+}
+
 impl Inner {
-    fn db_error(&self) -> String {
-        format!(
-            "无法打开 {} 数据库:{}",
-            self.source.kind().label(),
-            self.source.db_path().display()
-        )
+    /// 运行期唯一入口：查询前补一次 DSH 增量。没有后台线程；App 退出后不再被调用。
+    fn ensure_dsh(&self, full: bool) -> dsh::IndexStats {
+        let mut indexer = self.dsh.lock().expect("dsh index mutex poisoned");
+        match indexer.ensure_fresh(full) {
+            Ok(stats) => stats,
+            Err(e) => dsh::IndexStats::error(e.to_string()),
+        }
+    }
+
+    fn query_conn(&self, filter: SourceFilter) -> Result<rusqlite::Connection, AppError> {
+        unified::open_query(&self.index_path, &self.zcode_path, filter)
+    }
+
+    fn source_statuses(&self, dsh_stats: &dsh::IndexStats) -> Vec<SourceStatus> {
+        vec![
+            SourceStatus {
+                id: sources::SourceId::Zcode.as_str(),
+                label: sources::SourceId::Zcode.label(),
+                available: self.zcode_path.exists(),
+                indexed_at: 0,
+                error: None,
+            },
+            SourceStatus {
+                id: sources::SourceId::Dsh.as_str(),
+                label: sources::SourceId::Dsh.label(),
+                available: dsh_stats.available,
+                indexed_at: dsh_stats.indexed_at,
+                error: dsh_stats.last_error.clone(),
+            },
+        ]
+    }
+
+    /// 供应商展示名：两个源的 provider id 都加 source 前缀，
+    /// 避免同一个中转在聚合视图里被误合并。
+    fn provider_names(&self) -> HashMap<String, String> {
+        let mut names = HashMap::new();
+        for (id, name) in providers::load_provider_names() {
+            names.insert(format!("zc:{id}"), name);
+        }
+        for (id, name) in providers::load_dsh_provider_names() {
+            names.insert(format!("dsh:{id}"), name);
+        }
+        names
     }
 
     /// 一次查询返回仪表盘需要的全部数据；同步实现，由命令层放到阻塞线程池执行。
-    /// 14 条查询各自独立只读连接并行跑（SQLite WAL 支持多读者），
-    /// 墙钟时间从「14 条相加」降到「最慢的一条」。
-    fn query_dashboard(&self, range: &types::Range) -> Result<types::DashboardPayload, AppError> {
+    /// 14 条查询各自独立只读连接并行跑；连接由统一查询层创建（视图已按 source 过滤）。
+    fn query_dashboard(
+        &self,
+        range: &types::Range,
+        filter: SourceFilter,
+    ) -> Result<types::DashboardPayload, AppError> {
+        let dsh_stats = self.ensure_dsh(false);
         let p = &self.pricing_path;
-        let names = self.source.provider_names();
+        let names = self.provider_names();
         let mut conns = Vec::with_capacity(14);
         for _ in 0..14 {
-            conns.push(self.source.open()?);
+            conns.push(self.query_conn(filter)?);
         }
         // 每条查询独占一个连接：Connection 不是 Sync，必须 move 进各自线程
         let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13] =
@@ -110,6 +165,7 @@ impl Inner {
             activity,
             activity_daily,
             monthly_trend,
+            sources: self.source_statuses(&dsh_stats),
         })
     }
 }
@@ -123,36 +179,30 @@ fn join_query<T>(
         .and_then(|v| v.map_err(AppError::from))
 }
 
-/// 统一取连接:返回 (guard, conn),guard 必须与 conn 同生命周期
-macro_rules! with_conn {
-    ($state:expr, $conn:ident, $guard:ident) => {
-        let $guard = $state.db.lock().expect("db mutex poisoned");
-        let $conn = $guard.as_ref().ok_or_else(|| $state.db_error())?;
-    };
-}
-
 /// 一次刷新只走一个命令：14 个查询在同一个阻塞任务里跑完，避免 14 次 IPC 往返。
 #[tauri::command]
 async fn get_dashboard(
     state: tauri::State<'_, AppState>,
     range: types::Range,
+    source: Option<SourceFilter>,
 ) -> Result<types::DashboardPayload, AppError> {
     let inner = state.inner.clone();
-    tauri::async_runtime::spawn_blocking(move || inner.query_dashboard(&range))
+    let filter = source.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || inner.query_dashboard(&range, filter))
         .await
         .map_err(|e| AppError::Task(e.to_string()))?
 }
 
 #[tauri::command]
 fn get_summary(state: tauri::State<AppState>, range: types::Range) -> Result<types::Summary, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_summary(conn, &range, &state.pricing_path).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_summary(&conn, &range, &state.pricing_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_trend(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::TrendPoint>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_trend(conn, &range, &state.pricing_path).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_trend(&conn, &range, &state.pricing_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -160,8 +210,8 @@ fn get_trend_by_model(
     state: tauri::State<AppState>,
     range: types::Range,
 ) -> Result<Vec<types::ModelTrendPoint>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_trend_by_model(conn, &range, &state.pricing_path).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_trend_by_model(&conn, &range, &state.pricing_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -169,8 +219,8 @@ fn get_trend_by_provider(
     state: tauri::State<AppState>,
     range: types::Range,
 ) -> Result<Vec<types::ProviderTrendPoint>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_trend_by_provider(conn, &range, &state.pricing_path).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_trend_by_provider(&conn, &range, &state.pricing_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -180,7 +230,8 @@ async fn get_models(
 ) -> Result<Vec<types::ModelStat>, AppError> {
     let inner = state.inner.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = inner.source.open()?;
+        inner.ensure_dsh(false);
+        let conn = inner.query_conn(SourceFilter::All)?;
         queries::get_model_stats(&conn, &range, &inner.pricing_path).map_err(AppError::from)
     })
     .await
@@ -189,33 +240,33 @@ async fn get_models(
 
 #[tauri::command]
 fn get_agents(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::AgentStat>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_agent_stats(conn, &range).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_agent_stats(&conn, &range).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_activity_daily(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::DailyActivityPoint>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_activity_daily(conn, &range).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_activity_daily(&conn, &range).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_monthly_trend(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::MonthPoint>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_monthly_trend(conn, &range, &state.pricing_path).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_monthly_trend(&conn, &range, &state.pricing_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_projects(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::ProjectStat>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_project_stats(conn, &range, &state.pricing_path).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_project_stats(&conn, &range, &state.pricing_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_providers(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::ProviderStat>, String> {
-    with_conn!(state, conn, _guard);
-    let names = state.source.provider_names();
-    queries::get_provider_stats(conn, &range, &state.pricing_path, &names).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    let names = state.provider_names();
+    queries::get_provider_stats(&conn, &range, &state.pricing_path, &names).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -224,13 +275,16 @@ async fn get_requests(
     range: types::Range,
     page: i64,
     page_size: i64,
+    source: Option<SourceFilter>,
 ) -> Result<types::RequestLogResponse, AppError> {
     let inner = state.inner.clone();
+    let filter = source.unwrap_or_default();
     let page = page.max(1);
     // 分页单位是根会话:每页返回 N 个会话分组
     let page_size = page_size.clamp(5, 50);
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = inner.source.open()?;
+        inner.ensure_dsh(false);
+        let conn = inner.query_conn(filter)?;
         queries::get_request_log(&conn, &range, page, page_size, &inner.pricing_path)
             .map_err(AppError::from)
     })
@@ -265,26 +319,26 @@ fn save_ui_prefs(state: tauri::State<'_, AppState>, prefs: serde_json::Value) ->
 
 #[tauri::command]
 fn get_tools(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::ToolStat>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_tool_stats(conn, &range).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_tool_stats(&conn, &range).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_errors(state: tauri::State<AppState>, range: types::Range) -> Result<types::ErrorStats, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_error_stats(conn, &range).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_error_stats(&conn, &range).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_latency(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::LatencyStat>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_latency_stats(conn, &range).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_latency_stats(&conn, &range).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn get_activity(state: tauri::State<AppState>, range: types::Range) -> Result<Vec<types::HeatCell>, String> {
-    with_conn!(state, conn, _guard);
-    queries::get_activity_heatmap(conn, &range).map_err(|e| e.to_string())
+    let conn = state.conn()?;
+    queries::get_activity_heatmap(&conn, &range).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -362,7 +416,8 @@ async fn estimate_cost(
 ) -> Result<f64, AppError> {
     let inner = state.inner.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = inner.source.open()?;
+        inner.ensure_dsh(false);
+        let conn = inner.query_conn(SourceFilter::All)?;
         let mut cfg = (*pricing::load(&inner.pricing_path)).clone();
         cfg.models.insert(model_id.clone(), entry);
         queries::cost_in_range(&conn, &range, &cfg, &model_id).map_err(AppError::from)
@@ -374,17 +429,32 @@ async fn estimate_cost(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Meta {
-    db_path: String,
-    source: &'static str,
+    zcode_path: String,
+    dsh_root: String,
+    index_path: String,
+    sources: Vec<SourceStatus>,
     supports_provider_editing: bool,
 }
 
 #[tauri::command]
 fn get_meta(state: tauri::State<AppState>) -> Meta {
+    let stats = state.ensure_dsh(false);
+    let (dsh_root, index_path) = state
+        .dsh
+        .lock()
+        .map(|i| {
+            (
+                i.root().display().to_string(),
+                i.db_path().display().to_string(),
+            )
+        })
+        .unwrap_or_default();
     Meta {
-        db_path: state.source.db_path().display().to_string(),
-        source: state.source.kind().label(),
-        supports_provider_editing: state.source.supports_provider_editing(),
+        zcode_path: state.zcode_path.display().to_string(),
+        dsh_root,
+        index_path,
+        sources: state.source_statuses(&stats),
+        supports_provider_editing: true,
     }
 }
 
@@ -665,12 +735,15 @@ pub fn run() {
             let pricing_path = config_dir.join("pricing.json");
             pricing::ensure_migrated(&pricing_path);
 
-            let source = Box::new(sources::ZcodeSource::new());
-            let conn = source.open().ok();
+            // 不在这里建索引：App 启动阶段不做 DSH 扫描；第一次查询时才补增量。
+            let zcode_path = sources::zcode_db_path();
+            let index_path = sources::dsh_index_path(&config_dir);
+            let dsh = dsh::DshIndexer::new(sources::dsh_sessions_root(), index_path.clone());
             app.manage(AppState {
                 inner: Arc::new(Inner {
-                    source,
-                    db: Mutex::new(conn),
+                    zcode_path,
+                    index_path,
+                    dsh: Mutex::new(dsh),
                     pricing_path,
                 }),
             });

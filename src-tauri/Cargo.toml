@@ -22,6 +22,8 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 tauri-plugin-single-instance = "2"
 chrono = "0.4.45"
 dirs = "6.0.0"
+# DSH 会话日志是多帧 zstd，索引器需要流式解压
+zstd = "0.13"
 # 新增自定义供应商时生成条目 key(zcode 对非 builtin 供应商用 UUID)
 uuid = { version = "1", features = ["v4"] }
 # 拉取供应商可用模型列表用(GET {baseURL}/models);default-tls 走系统证书链,

@@ -1,3 +1,4 @@
+use crate::sources::SourceStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -543,4 +544,6 @@ pub struct DashboardPayload {
     pub activity: Vec<HeatCell>,
     pub activity_daily: Vec<DailyActivityPoint>,
     pub monthly_trend: Vec<MonthPoint>,
+    /// 各数据源的可用性 / 新鲜度；某个源不可用时前端置灰并提示
+    pub sources: Vec<SourceStatus>,
 }

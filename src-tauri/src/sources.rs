@@ -1,70 +1,75 @@
-use crate::error::AppError;
-use crate::{db, providers};
-use rusqlite::Connection;
-use std::collections::HashMap;
+//! 数据源范围与状态。
+//!
+//! 查询层把两个源（zcode / DSH）投影成一个带 `source` 列的查询面；
+//! 本模块只定义范围枚举、展示名和路径，不持有任何连接或后台任务。
+
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-/// 数据源类型。DSH 在 P6 接入（JSONL → zcode 同构索引库），
-/// 查询层只认 model_usage / session / tool_usage 三张表，所以这里只需要换库路径与供应商名。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SourceKind {
+/// 前端传来的数据源范围：全部 / 只看 zcode / 只看 DSH。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceFilter {
+    #[default]
+    All,
     Zcode,
-    #[allow(dead_code)]
     Dsh,
 }
 
-impl SourceKind {
-    pub fn label(self) -> &'static str {
+impl SourceFilter {
+    /// 该范围是否包含某个源；前端/状态展示用。
+    #[allow(dead_code)]
+    pub fn includes(self, id: SourceId) -> bool {
         match self {
-            SourceKind::Zcode => "zcode",
-            SourceKind::Dsh => "DSH",
+            SourceFilter::All => true,
+            SourceFilter::Zcode => id == SourceId::Zcode,
+            SourceFilter::Dsh => id == SourceId::Dsh,
         }
     }
 }
 
-/// 一个数据源要提供的全部能力：库路径、只读连接、供应商展示名、是否允许写回供应商配置。
-pub trait DataSource: Send + Sync {
-    fn kind(&self) -> SourceKind;
-    fn db_path(&self) -> &Path;
-    fn open(&self) -> Result<Connection, AppError>;
-    fn provider_names(&self) -> HashMap<String, String>;
-    fn supports_provider_editing(&self) -> bool;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceId {
+    Zcode,
+    Dsh,
 }
 
-/// zcode：~/.zcode/cli/db/db.sqlite（可用 ZCODE_DB_PATH 覆盖），只读打开。
-pub struct ZcodeSource {
-    path: PathBuf,
-}
+impl SourceId {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SourceId::Zcode => "zcode",
+            SourceId::Dsh => "dsh",
+        }
+    }
 
-impl ZcodeSource {
-    pub fn new() -> Self {
-        Self { path: db::db_path() }
+    pub fn label(self) -> &'static str {
+        match self {
+            SourceId::Zcode => "zcode",
+            SourceId::Dsh => "DSH",
+        }
     }
 }
 
-impl DataSource for ZcodeSource {
-    fn kind(&self) -> SourceKind {
-        SourceKind::Zcode
-    }
+/// 每个源的可用性 / 新鲜度，随 DashboardPayload 一起返回。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceStatus {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub available: bool,
+    /// DSH 索引最后更新时间（epoch ms）；zcode 是实时库，固定 0
+    pub indexed_at: i64,
+    pub error: Option<String>,
+}
 
-    fn db_path(&self) -> &Path {
-        &self.path
-    }
+pub fn zcode_db_path() -> PathBuf {
+    crate::db::db_path()
+}
 
-    fn open(&self) -> Result<Connection, AppError> {
-        Connection::open_with_flags(&self.path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| {
-            AppError::Unavailable(format!(
-                "无法打开 zcode 数据库:{}（{e}）",
-                self.path.display()
-            ))
-        })
-    }
+pub fn dsh_index_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("dsh-index.sqlite")
+}
 
-    fn provider_names(&self) -> HashMap<String, String> {
-        providers::load_provider_names()
-    }
-
-    fn supports_provider_editing(&self) -> bool {
-        true
-    }
+pub fn dsh_sessions_root() -> PathBuf {
+    crate::dsh::default_sessions_root()
 }

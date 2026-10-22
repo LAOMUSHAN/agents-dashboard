@@ -247,6 +247,20 @@ export interface RequestLogResponse {
   pageSize: number;
 }
 
+/** 数据源：zcode / DSH；"all" 是查询范围而不是一个源 */
+export type SourceId = "zcode" | "dsh";
+export type SourceFilter = "all" | SourceId;
+
+/** 各数据源的可用性 / 新鲜度 */
+export interface SourceStatus {
+  id: SourceId;
+  label: string;
+  available: boolean;
+  /** DSH 索引最后更新时间(epoch ms)；zcode 是实时库，固定 0 */
+  indexedAt: number;
+  error: string | null;
+}
+
 /** 一次刷新返回的全部面板数据(后端 get_dashboard 合并命令,同一数据库快照) */
 export interface DashboardPayload {
   summary: Summary;
@@ -263,6 +277,8 @@ export interface DashboardPayload {
   activity: HeatCell[];
   activityDaily: DailyActivityPoint[];
   monthlyTrend: MonthPoint[];
+  /** 各数据源状态；某源不可用时前端置灰并提示 */
+  sources: SourceStatus[];
 }
 
 /** 单个工具的调用统计(tool_usage 表) */

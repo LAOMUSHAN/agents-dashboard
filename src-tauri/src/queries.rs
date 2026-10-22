@@ -1944,21 +1944,31 @@ mod tests {
         }
         pricing::save(&path, &cfg).expect("写临时价格表");
 
-        let log = get_request_log(&conn, &range, 1, 10, &path).expect("get_request_log");
         let mut saw_cny = false;
         let mut saw_usd = false;
-        for g in &log.groups {
-            for row in &g.requests {
-                let want = cfg.models[&row.model_id].currency.clone();
-                assert_eq!(row.currency, want, "请求行 {} 的币种应跟随价格表", row.model_id);
-                if pricing::is_cny_currency(row.currency.as_deref()) {
-                    saw_cny = true;
-                } else {
-                    saw_usd = true;
+        // 第一页可能整页都是同一个模型；翻几页直到两种币种都出现，
+        // 这里验证的是逐行币种标注，不是某一页的模型构成
+        for page in 1..=20 {
+            let log = get_request_log(&conn, &range, page, 10, &path).expect("get_request_log");
+            if log.groups.is_empty() {
+                break;
+            }
+            for g in &log.groups {
+                for row in &g.requests {
+                    let want = cfg.models[&row.model_id].currency.clone();
+                    assert_eq!(row.currency, want, "请求行 {} 的币种应跟随价格表", row.model_id);
+                    if pricing::is_cny_currency(row.currency.as_deref()) {
+                        saw_cny = true;
+                    } else {
+                        saw_usd = true;
+                    }
                 }
             }
+            if saw_cny && saw_usd {
+                break;
+            }
         }
-        assert!(saw_cny && saw_usd, "本页应同时出现两种币种的请求行");
+        assert!(saw_cny && saw_usd, "前 20 页内应出现两种币种的请求行");
 
         let models = get_model_stats(&conn, &range, &path).expect("get_model_stats");
         for m in &models {
