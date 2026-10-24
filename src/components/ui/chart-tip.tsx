@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { fmtBucket } from "../../format";
+import { HintCard } from "./hint";
 
 /**
  * 图表统一悬浮卡:替代旧 .chart-tooltip 类,直接用设计令牌着色。
@@ -20,7 +21,7 @@ export function ChartTip({
 }) {
   if (!active || rows.length === 0) return null;
   return (
-    <div className="rounded-lg border border-border bg-popover/95 px-3 py-2 shadow-lg backdrop-blur-sm">
+    <HintCard className="min-w-[140px]">
       {label != null && (
         <div className="mb-1 text-[11px] font-semibold text-foreground">{fmtBucket(String(label))}</div>
       )}
@@ -39,6 +40,6 @@ export function ChartTip({
           </div>
         )}
       </div>
-    </div>
+    </HintCard>
   );
 }

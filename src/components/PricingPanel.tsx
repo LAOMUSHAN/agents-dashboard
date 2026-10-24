@@ -3,6 +3,7 @@ import type { ModelStat, PeakWindow, PriceEntry, PricingConfig } from "../../sha
 import { api, type Range } from "../api";
 import { fmtAmount, fmtCostIn, isCnyCurrency, moneyRate, setUsdCnyRate } from "../format";
 import { Panel } from "./ui/panel";
+import { Hint, HintText } from "./ui/hint";
 import { cn } from "@/lib/utils";
 
 /** 一行 = 一个模型的价格草稿(全部以字符串保存,便于编辑中的空值/小数) */
@@ -206,30 +207,31 @@ function TimeInput({
 function ToggleBtn({
   active,
   label,
-  title,
+  hint,
   onClick,
 }: {
   active: boolean;
   label: string;
-  title: string;
+  hint: string;
   onClick: () => void;
 }) {
   return (
-    <button
-      className={cn(
-        "w-16 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
-        active
-          ? "border-clay/40 bg-clay-soft text-clay"
-          : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
-      )}
-      title={title}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-    >
-      {label}
-    </button>
+    <Hint content={<HintText>{hint}</HintText>} className="w-[230px]">
+      <button
+        className={cn(
+          "w-16 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
+          active
+            ? "border-clay/40 bg-clay-soft text-clay"
+            : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+        )}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick();
+        }}
+      >
+        {label}
+      </button>
+    </Hint>
   );
 }
 
@@ -471,17 +473,21 @@ export function PricingPanel({
       actions={
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           汇率 1$ =
-          <input
-            className={cn(RATE_INPUT, "text-foreground")}
-            type="number"
-            min="0"
-            step="0.01"
-            value={rateText}
-            onChange={(e) => setRateText(e.target.value)}
-            onBlur={(e) => commitRate(e.target.value)}
-            onKeyDown={commitOnEnter}
-            title="改完这一格再失焦或回车才生效,输入过程中不重算也不落盘"
-          />
+          <Hint
+            className="w-[250px]"
+            content={<HintText>改完这一格再失焦或回车才生效；输入过程中不重算也不落盘。</HintText>}
+          >
+            <input
+              className={cn(RATE_INPUT, "text-foreground")}
+              type="number"
+              min="0"
+              step="0.01"
+              value={rateText}
+              onChange={(e) => setRateText(e.target.value)}
+              onBlur={(e) => commitRate(e.target.value)}
+              onKeyDown={commitOnEnter}
+            />
+          </Hint>
           ¥
         </label>
       }
@@ -517,26 +523,34 @@ export function PricingPanel({
                       open && "bg-muted/30",
                     )}
                     onClick={() => toggleExpand(r.modelId)}
-                    title="点击展开/收起该模型的峰谷与长上下文设置"
                   >
                     <td className="max-w-48 truncate px-2 py-1.5 font-mono text-xs" title={r.modelId}>
-                      <span className="mr-1.5 inline-block text-muted-foreground">{open ? "▾" : "▸"}</span>
+                      <Hint
+                        className="w-[250px]"
+                        content={<HintText>点击展开/收起该模型的峰谷与长上下文设置</HintText>}
+                      >
+                        <span className="mr-1.5 inline-block text-muted-foreground">{open ? "▾" : "▸"}</span>
+                      </Hint>
                       {r.modelId}
                     </td>
                     <td className="px-2 py-1.5">
-                      <select
-                        className="rounded-md border border-border bg-background px-1.5 py-1 text-xs"
-                        value={r.currency}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          update(i, "currency", e.target.value as Row["currency"]);
-                          refreshEstimate();
-                        }}
-                        title="该行价格数字的币种;人民币价会按汇率折成美元参与计算"
+                      <Hint
+                        className="w-[250px]"
+                        content={<HintText>该行价格数字的币种；人民币价会按汇率折成美元参与计算。</HintText>}
                       >
-                        <option value="usd">$</option>
-                        <option value="cny">¥</option>
-                      </select>
+                        <select
+                          className="rounded-md border border-border bg-background px-1.5 py-1 text-xs"
+                          value={r.currency}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            update(i, "currency", e.target.value as Row["currency"]);
+                            refreshEstimate();
+                          }}
+                        >
+                          <option value="usd">$</option>
+                          <option value="cny">¥</option>
+                        </select>
+                      </Hint>
                     </td>
                     {(["input", "output", "cacheRead", "cacheWrite"] as const).map((f) => (
                       <td key={f} className={CELL}>
@@ -557,9 +571,9 @@ export function PricingPanel({
                       <ToggleBtn
                         active={r.peakEnabled}
                         label="峰谷"
-                        title={
+                        hint={
                           r.peakEnabled
-                            ? `已启用:峰时段单价 = 谷时价 × ${r.peakMultiplier}(点击停用)`
+                            ? `已启用：峰时段单价 = 谷时价 × ${r.peakMultiplier}（点击停用）`
                             : "启用峰时段加价"
                         }
                         onClick={() => {
@@ -572,19 +586,25 @@ export function PricingPanel({
                       <ToggleBtn
                         active={r.longEnabled}
                         label="长上下文"
-                        title={r.longEnabled ? "已启用长上下文加价(点击停用)" : "启用长上下文加价"}
+                        hint={r.longEnabled ? "已启用长上下文加价（点击停用）" : "启用长上下文加价"}
                         onClick={() => {
                           update(i, "longEnabled", !r.longEnabled);
                           refreshEstimate();
                         }}
                       />
                     </td>
-                    <td
-                      className={cn(CELL, "text-muted-foreground")}
-                      title="按当前时间范围内的用量与编辑中的价格估算(未保存也生效),币种跟随该行的币种设置"
+                    <Hint
+                      className="w-[270px]"
+                      content={
+                        <HintText>
+                          按当前时间范围内的用量与编辑中的价格估算（未保存也生效）；币种跟随该行的币种设置。
+                        </HintText>
+                      }
                     >
-                      {r.modelId.trim() ? (r.est == null ? "…" : fmtCostIn(r.est, r.currency)) : "—"}
-                    </td>
+                      <td className={cn(CELL, "text-muted-foreground")}>
+                        {r.modelId.trim() ? (r.est == null ? "…" : fmtCostIn(r.est, r.currency)) : "—"}
+                      </td>
+                    </Hint>
                   </tr>
                   {open && (
                     <tr className="border-b border-border/40 bg-muted/25">
@@ -611,20 +631,28 @@ export function PricingPanel({
                                 ["peak", "峰"],
                                 ["offPeak", "谷"],
                               ] as const).map(([k, label]) => (
-                                <button
+                                <Hint
                                   key={k}
-                                  className={cn(
-                                    "rounded px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50",
-                                    r.peakKind === k
-                                      ? "bg-primary text-primary-foreground"
-                                      : "text-muted-foreground hover:text-foreground",
-                                  )}
-                                  disabled={!r.peakEnabled}
-                                  title={k === "peak" ? "下列时段是峰时段,其余为谷" : "下列时段是谷时段,其余为峰"}
-                                  onClick={() => switchPeakKind(i, k)}
+                                  className="w-[230px]"
+                                  content={
+                                    <HintText>
+                                      {k === "peak" ? "下列时段是峰时段，其余为谷。" : "下列时段是谷时段，其余为峰。"}
+                                    </HintText>
+                                  }
                                 >
-                                  {label}
-                                </button>
+                                  <button
+                                    className={cn(
+                                      "rounded px-2 py-0.5 text-[11px] font-medium transition-colors disabled:opacity-50",
+                                      r.peakKind === k
+                                        ? "bg-primary text-primary-foreground"
+                                        : "text-muted-foreground hover:text-foreground",
+                                    )}
+                                    disabled={!r.peakEnabled}
+                                    onClick={() => switchPeakKind(i, k)}
+                                  >
+                                    {label}
+                                  </button>
+                                </Hint>
                               ))}
                             </div>
                             <span className="text-muted-foreground">{r.peakKind === "offPeak" ? "谷" : "峰"}时段</span>
@@ -641,24 +669,26 @@ export function PricingPanel({
                                   disabled={!r.peakEnabled}
                                   onChange={(v) => patchWindow(i, wi, { endMin: v })}
                                 />
-                                <button
-                                  className="rounded px-1 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-                                  disabled={!r.peakEnabled}
-                                  title="删除该时段"
-                                  onClick={() => setWindows(i, r.peakWindows.filter((_, j) => j !== wi))}
-                                >
-                                  ✕
-                                </button>
+                                <Hint className="w-[180px]" content={<HintText>删除该时段</HintText>}>
+                                  <button
+                                    className="rounded px-1 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                    disabled={!r.peakEnabled}
+                                    onClick={() => setWindows(i, r.peakWindows.filter((_, j) => j !== wi))}
+                                  >
+                                    ✕
+                                  </button>
+                                </Hint>
                               </span>
                             ))}
-                            <button
-                              className="rounded-md border border-border bg-background px-2 py-1 text-[11px] transition-colors hover:bg-muted disabled:opacity-50"
-                              disabled={!r.peakEnabled}
-                              title="添加一个时段"
-                              onClick={() => setWindows(i, [...r.peakWindows, { startMin: 0, endMin: 0 }])}
-                            >
-                              + 时段
-                            </button>
+                            <Hint className="w-[180px]" content={<HintText>添加一个时段</HintText>}>
+                              <button
+                                className="rounded-md border border-border bg-background px-2 py-1 text-[11px] transition-colors hover:bg-muted disabled:opacity-50"
+                                disabled={!r.peakEnabled}
+                                onClick={() => setWindows(i, [...r.peakWindows, { startMin: 0, endMin: 0 }])}
+                              >
+                                + 时段
+                              </button>
+                            </Hint>
                             {r.peakWindows.some(isBadWindow) && (
                               <span className="text-[11px] text-warn">结束时间需晚于开始时间</span>
                             )}
@@ -715,9 +745,17 @@ export function PricingPanel({
                 <td className="px-2 py-2 text-muted-foreground" colSpan={8}>
                   合计(当前时间范围,按编辑中的价格)
                 </td>
-                <td className={cn(CELL, "text-foreground")} title="美元定价的模型合计(美元) · 人民币定价的模型合计(人民币)">
-                  {fmtAmount(totals.cny * moneyRate(), "cny")} · {fmtAmount(totals.usd, "usd")}
-                </td>
+                <Hint
+                  align="end"
+                  className="w-[280px]"
+                  content={
+                    <HintText>美元定价的模型合计（美元）· 人民币定价的模型合计（人民币）</HintText>
+                  }
+                >
+                  <td className={cn(CELL, "text-foreground")}>
+                    {fmtAmount(totals.cny * moneyRate(), "cny")} · {fmtAmount(totals.usd, "usd")}
+                  </td>
+                </Hint>
               </tr>
             </tfoot>
           )}

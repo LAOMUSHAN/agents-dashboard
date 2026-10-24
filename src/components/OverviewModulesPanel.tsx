@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DragEvent as ReactDragEvent } from "react";
 import { Eye, EyeOff, GripVertical, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Hint, HintText } from "./ui/hint";
 import {
   OVERVIEW_MODULE_MAP,
   defaultOverviewLayout,
@@ -81,25 +82,33 @@ function ModuleRow({
         : null;
 
   return (
-    <li
-      draggable
-      tabIndex={0}
-      aria-label={`${def.label}，拖动调整顺序`}
-      title="拖动调整顺序"
-      className={cn(
-        "group relative flex cursor-grab select-none items-center gap-2.5 rounded-lg border px-2.5 py-2 outline-none transition-[background-color,border-color,box-shadow,opacity,transform] duration-150 focus-visible:ring-2 focus-visible:ring-clay/40 active:cursor-grabbing",
-        section === "visible"
-          ? "border-border/55 bg-background/65"
-          : "border-transparent bg-background/30",
-        "hover:border-border hover:bg-accent/30",
-        dragging && "opacity-35",
-        settling && "module-settle",
-      )}
-      onDragStart={(e) => onDragStart(e, id)}
-      onDragEnd={onDragEnd}
-      onDragOver={(e) => onDragOver(e, section, index)}
-      onDrop={onDrop}
+    <Hint
+      openDelay={350}
+      className="w-[240px]"
+      content={
+        <HintText title="拖动调整顺序">
+          按住这一行拖动；拖到下方隐藏区即可从总览移除。
+        </HintText>
+      }
     >
+      <li
+        draggable
+        tabIndex={0}
+        aria-label={`${def.label}，拖动调整顺序`}
+        className={cn(
+          "group relative flex cursor-grab select-none items-center gap-2.5 rounded-lg border px-2.5 py-2 outline-none transition-[background-color,border-color,box-shadow,opacity,transform] duration-150 focus-visible:ring-2 focus-visible:ring-clay/40 active:cursor-grabbing",
+          section === "visible"
+            ? "border-border/55 bg-background/65"
+            : "border-transparent bg-background/30",
+          "hover:border-border hover:bg-accent/30",
+          dragging && "opacity-35",
+          settling && "module-settle",
+        )}
+        onDragStart={(e) => onDragStart(e, id)}
+        onDragEnd={onDragEnd}
+        onDragOver={(e) => onDragOver(e, section, index)}
+        onDrop={onDrop}
+      >
       {line && (
         <span
           className={cn(
@@ -118,7 +127,8 @@ function ModuleRow({
         <Icon size={13} strokeWidth={1.8} />
       </span>
       <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">{def.label}</span>
-    </li>
+      </li>
+    </Hint>
   );
 }
 
@@ -257,15 +267,20 @@ export function OverviewModulesPanel({
       title="总览模块"
       sub="拖动排序；拖到横线下方即隐藏"
       actions={
-        <button
-          type="button"
-          onClick={reset}
-          className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          title="恢复默认的模块顺序与显示范围"
+        <Hint
+          align="end"
+          className="w-[220px]"
+          content={<HintText>恢复默认的模块顺序与显示范围</HintText>}
         >
-          <RotateCcw size={11} />
-          恢复默认
-        </button>
+          <button
+            type="button"
+            onClick={reset}
+            className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <RotateCcw size={11} />
+            恢复默认
+          </button>
+        </Hint>
       }
     >
       <div className="space-y-1 px-1">

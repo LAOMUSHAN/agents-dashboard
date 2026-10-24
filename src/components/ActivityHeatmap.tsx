@@ -12,6 +12,7 @@ import type { Committed } from "../data/committed";
 import type { ViewRequest } from "../data/requests";
 import { fmtTokens } from "../format";
 import { barScale } from "./ui/data-viz";
+import { HintCard, Hint, HintText } from "./ui/hint";
 import { Panel } from "./ui/panel";
 import { Segmented } from "./ui/segmented";
 import { cn } from "@/lib/utils";
@@ -134,21 +135,28 @@ function Metric({ label, value, hint }: { label: string; value: string; hint?: s
 }
 
 function Legend({ cap }: { cap?: number }) {
-  return (
-    <div
-      className="flex items-center gap-1.5 text-[10px] text-muted-foreground"
-      title={
-        cap && cap > 0
-          ? `色阶按区间内非零小时的 P90 归一化（${fmtTokens(cap)} Token）；超过 P90 为最深色`
-          : undefined
-      }
-    >
+  const legend = (
+    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
       <span>少</span>
       {LEVELS.map((c, i) => (
         <span key={i} className={cn("size-2.5 rounded-[3px]", c)} />
       ))}
       <span>多</span>
     </div>
+  );
+  if (!cap || cap <= 0) return legend;
+  return (
+    <Hint
+      align="end"
+      className="w-[270px]"
+      content={
+        <HintText title="色阶">
+          按区间内非零小时的 P90 归一化（{fmtTokens(cap)} Token）；超过 P90 为最深色。
+        </HintText>
+      }
+    >
+      {legend}
+    </Hint>
   );
 }
 
@@ -177,11 +185,8 @@ function HeatTip({
   onClose?: () => void;
 }) {
   return (
-    <div
-      className={cn(
-        "relative rounded-xl border border-border/70 bg-popover/95 p-3 text-popover-foreground shadow-popover backdrop-blur-md",
-        expanded ? "w-[214px]" : "w-[188px]",
-      )}
+    <HintCard
+      className={cn("relative", expanded ? "w-[214px]" : "w-[188px]")}
     >
       {expanded && (
         <button
@@ -212,7 +217,7 @@ function HeatTip({
           <span className="tabular-nums text-foreground">{fmtPct(tip.share)}</span>
         </div>
       )}
-    </div>
+    </HintCard>
   );
 }
 

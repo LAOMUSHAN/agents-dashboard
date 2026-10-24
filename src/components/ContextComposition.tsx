@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import type { Summary, ToolStat } from "../../shared/types";
 import { fmtNumber, fmtPercent, fmtTokens } from "../format";
+import { HintCard } from "./ui/hint";
 import { Panel } from "./ui/panel";
 
 /** 工具调用按前缀归类;未匹配的归"其他" */
@@ -34,12 +35,12 @@ function PieTip({
   if (!active || !payload?.length) return null;
   const p = payload[0].payload ?? { name: "", value: 0 };
   return (
-    <div className="rounded-lg border border-border bg-popover/95 px-3 py-2 text-xs shadow-lg backdrop-blur-sm">
+    <HintCard className="min-w-[140px] text-xs">
       <div className="font-semibold">{p.name}</div>
       <div className="mt-0.5 tabular-nums text-muted-foreground">
         {unit === "tokens" ? fmtTokens(p.value) : fmtNumber(p.value)} {unit}
       </div>
-    </div>
+    </HintCard>
   );
 }
 

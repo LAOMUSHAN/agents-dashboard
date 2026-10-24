@@ -1,6 +1,7 @@
 import type { ToolStat } from "../../shared/types";
 import { fmtDuration, fmtNumber, fmtPercent } from "../format";
 import { Panel } from "./ui/panel";
+import { Hint, HintText } from "./ui/hint";
 import { StatBadge } from "./ui/stat-badge";
 import { SourceBadge } from "./SourceBadge";
 
@@ -47,7 +48,9 @@ export function ToolStatsPanel({
                 <td className={TD_NUM}>{fmtNumber(t.calls)}</td>
                 <td className={TD_NUM + " text-muted-foreground"}>
                   {partialCancelled && t.source === "dsh" ? (
-                    <span title="DSH 日志不记录工具取消状态">—</span>
+                    <Hint className="w-[220px]" content={<HintText>DSH 日志不记录工具取消状态</HintText>}>
+                      <span className="cursor-default">—</span>
+                    </Hint>
                   ) : (
                     t.cancelled || "-"
                   )}

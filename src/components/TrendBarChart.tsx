@@ -14,6 +14,7 @@ import { useChartPalette } from "../hooks/useChartPalette";
 import { Panel } from "./ui/panel";
 import { Segmented } from "./ui/segmented";
 import { ChartTip } from "./ui/chart-tip";
+import { HintCard } from "./ui/hint";
 
 type Metric = "tokens" | "cost" | "speed" | "decodeSpeed";
 export type TrendValue = {
@@ -319,14 +320,14 @@ export function TrendBarChart({
             {isBar && hover && (
               <div className="pointer-events-none absolute z-30" style={{ left: hover.x, top: hover.y }}>
                 {hover.kind === "segment" ? (
-                  <div className="max-w-[260px] rounded-lg border border-border bg-popover/95 px-3 py-2 shadow-lg backdrop-blur-sm">
+                  <HintCard className="max-w-[260px]">
                     <div className="text-[10.5px] text-muted-foreground">{fmtBucketRange(hover.bucket)}</div>
                     <div className="mt-1 flex items-center gap-2 text-xs">
                       <span className="inline-block size-2 shrink-0 rounded-full" style={{ background: hover.color }} />
                       <span className="min-w-0 break-words text-muted-foreground">{hover.name}</span>
                       <span className="ml-auto pl-3 font-medium tabular-nums text-foreground">{fmtV(hover.value)}</span>
                     </div>
-                  </div>
+                  </HintCard>
                 ) : (
                   <ChartTip
                     active

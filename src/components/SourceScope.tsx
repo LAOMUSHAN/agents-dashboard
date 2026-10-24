@@ -1,10 +1,11 @@
 import type { SourceFilter, SourceStatus } from "../../shared/types";
 import { Segmented } from "./ui/segmented";
+import { Hint, HintText } from "./ui/hint";
 
-const OPTIONS: { value: SourceFilter; label: string; title: string }[] = [
-  { value: "all", label: "全部", title: "聚合 zcode 与 DSH" },
-  { value: "zcode", label: "zcode", title: "只看 zcode 用量库" },
-  { value: "dsh", label: "DSH", title: "只看 DSH 会话日志" },
+const OPTIONS: { value: SourceFilter; label: string }[] = [
+  { value: "all", label: "全部" },
+  { value: "zcode", label: "zcode" },
+  { value: "dsh", label: "DSH" },
 ];
 
 /** 顶部数据源范围：全部 / zcode / DSH。设置页不展示（配置按来源分别管理）。 */
@@ -23,10 +24,12 @@ export function SourceScope({
   const hint =
     unavailable.length > 0
       ? unavailable.map((s) => `${s.label} 不可用`).join("；")
-      : "数据源范围";
+      : "聚合 zcode 与 DSH；也可以只看单一来源。";
   return (
-    <div className={className} title={hint}>
-      <Segmented value={value} options={OPTIONS} onChange={onChange} />
-    </div>
+    <Hint className="w-[250px]" content={<HintText title="数据源范围">{hint}</HintText>}>
+      <div className={className}>
+        <Segmented value={value} options={OPTIONS} onChange={onChange} />
+      </div>
+    </Hint>
   );
 }

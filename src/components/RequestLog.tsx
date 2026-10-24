@@ -13,6 +13,7 @@ import {
 } from "../format";
 import { ChevronDown, ChevronRight, ScrollText } from "lucide-react";
 import { Panel } from "./ui/panel";
+import { Hint, HintText } from "./ui/hint";
 import { SourceBadge } from "./SourceBadge";
 import { StatusDot, type StatusKind } from "./ui/status-dot";
 import { HitRatePill, StackBar, Waterfall } from "./ui/data-viz";
@@ -86,6 +87,103 @@ function TimeCell({ startedAt }: { startedAt: number }) {
   );
 }
 
+interface ModelUsage {
+  modelId: string;
+  tokens: number;
+}
+
+interface ModelBreakdown {
+  /** 主智能体里用量最多的模型；主智能体没有请求时回落到子智能体 */
+  primary: ModelUsage | null;
+  main: ModelUsage[];
+  sub: ModelUsage[];
+  /** 除 primary 外的其他模型数（主 + 子去重） */
+  otherCount: number;
+}
+
+/** 请求日志模型列只显示模型短名（去掉 provider/ 前缀）；完整 ID 在悬停卡里 */
+function shortModelId(id: string) {
+  const slash = id.lastIndexOf("/");
+  return slash >= 0 && slash < id.length - 1 ? id.slice(slash + 1) : id;
+}
+
+/** 按「主智能体 / 子智能体」拆模型用量；token 口径与 Tokens 列一致（input+output） */
+function modelBreakdown(requests: RequestRow[]): ModelBreakdown {
+  const main = new Map<string, ModelUsage>();
+  const sub = new Map<string, ModelUsage>();
+  for (const r of requests) {
+    const bucket = isSubagentRow(r) ? sub : main;
+    const usage = bucket.get(r.modelId) ?? { modelId: r.modelId, tokens: 0 };
+    usage.tokens += r.inputTokens + r.outputTokens;
+    bucket.set(r.modelId, usage);
+  }
+  const byTokens = (a: ModelUsage, b: ModelUsage) => b.tokens - a.tokens;
+  const mainModels = [...main.values()].sort(byTokens);
+  const subModels = [...sub.values()].sort(byTokens);
+  const primary = mainModels[0] ?? subModels[0] ?? null;
+  const distinct = new Set([...mainModels, ...subModels].map((m) => m.modelId));
+  return {
+    primary,
+    main: mainModels,
+    sub: subModels,
+    otherCount: Math.max(0, distinct.size - (primary ? 1 : 0)),
+  };
+}
+
+function ModelUsageSection({
+  label,
+  models,
+  tone,
+}: {
+  label: string;
+  models: ModelUsage[];
+  tone: string;
+}) {
+  if (models.length === 0) return null;
+  const total = models.reduce((sum, m) => sum + m.tokens, 0);
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <span className={cn("size-1.5 shrink-0 rounded-full", tone)} />
+        <span className="font-medium text-foreground/80">{label}</span>
+        <span className="ml-auto tabular-nums">{fmtTokens(total)}</span>
+      </div>
+      <div className="mt-1 space-y-1">
+        {models.map((m) => (
+          <div key={m.modelId} className="flex items-baseline justify-between gap-3">
+            <span className="min-w-0 break-all font-mono text-[10.5px] leading-snug text-foreground/90">
+              {m.modelId}
+            </span>
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              {fmtTokens(m.tokens)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ModelUsageCard({ main, sub }: { main: ModelUsage[]; sub: ModelUsage[] }) {
+  return (
+    <div>
+      <div className="text-[10px] font-medium tracking-[0.04em] text-muted-foreground">模型用量</div>
+      <div className="mt-2 max-h-[300px] space-y-2.5 overflow-y-auto pr-1">
+        <ModelUsageSection label="主智能体" models={main} tone="bg-clay" />
+        <ModelUsageSection label="子智能体" models={sub} tone="bg-muted-foreground/50" />
+      </div>
+      {main.length === 0 && sub.length === 0 && (
+        <div className="mt-2 text-[11px] text-muted-foreground">没有可展示的模型</div>
+      )}
+      {main.length + sub.length > 0 && (
+        <div className="mt-2 border-t border-border/50 pt-1.5 text-[9.5px] text-muted-foreground/70">
+          Token = 输入 + 输出
+        </div>
+      )}
+    </div>
+  );
+}
+
 function groupStats(requests: RequestRow[]) {
   const input = requests.reduce((s, r) => s + r.inputTokens, 0);
   const output = requests.reduce((s, r) => s + r.outputTokens, 0);
@@ -120,7 +218,7 @@ function groupStats(requests: RequestRow[]) {
     }
   }
 
-  const models = [...new Set(requests.map((r) => r.modelId))];
+  const modelUsage = modelBreakdown(requests);
   return {
     input,
     output,
@@ -130,7 +228,7 @@ function groupStats(requests: RequestRow[]) {
     errors,
     maxDuration,
     totalDuration,
-    models,
+    modelUsage,
     speed: durationAll > 0 ? outputAll / (durationAll / 1000) : null,
     decode: decodeDuration > 0 ? decodeOutput / (decodeDuration / 1000) : null,
     ttft: ttftCount > 0 ? ttftSum / ttftCount : null,
@@ -244,12 +342,8 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
   // ---- 列宽：内容决定，固定列不压缩，时间列按「日期固定、分秒先截」让步 ----
   const tableRef = useRef<HTMLTableElement>(null);
   const naturalRef = useRef<number[] | null>(null);
-  // 模型列两种模式的自然宽：完整（最多 2 枚 chip）/ 窄窗（1 枚 chip + N）
-  const modelNatRef = useRef<{ full: number; compact: number } | null>(null);
   const [colW, setColW] = useState<number[] | null>(null);
   const [tableMinW, setTableMinW] = useState<number | undefined>();
-  // 窄窗时模型列只完整显示一枚 chip（第二枚由 CSS 隐藏，+N 改成 n−1）
-  const [modelCompact, setModelCompact] = useState(false);
   // 时间列的截断档位：0 完整 / 1 到分 / 2 到时 / 3 仅日期
   const [timeLevel, setTimeLevel] = useState(0);
   // 宽窗余量均分成的列间距（px）：只加到第 2 列起的左内边距上，首列左缘不动
@@ -264,14 +358,12 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
     const timeNat = nat[1];
     // 首 tok 的保底宽度 = 已加载数据里最长的 tokens 数字宽度（nat[5] 正是该数字 + 内边距）
     const ttftW = Math.max(nat[7], nat[5]);
-    // 模型列：完整两枚 chip → 窄窗一枚 chip + N
-    const modelFull = nat[2];
-    const modelMin = modelNatRef.current?.compact ?? modelFull;
+    // 模型列只显示「主智能体用量最多的模型 + 其他模型数」，自然宽即最终宽
+    const model = nat[2];
     // 除模型外的固定列：耗时、命中率、速度、首 tok、费用
     const fixedRest = nat[3] + nat[4] + nat[6] + ttftW + nat[8];
     const tokensNat = Math.max(nat[5], TOKEN_BAR_MIN + 16);
     const tokensMin = nat[5];
-    let model = modelFull;
     let tokens = tokensNat;
     let time = timeNat;
     let title = W - fixedRest - model - tokens - time;
@@ -289,7 +381,6 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
     }
     setColGap(gap > 0.5 ? gap : 0);
     if (gap > 0.5) {
-      setModelCompact(false);
       setTimeLevel(0);
       setTableMinW(undefined);
       setColW([
@@ -306,14 +397,7 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
       return;
     }
 
-    // 0) 标题放不下时，模型列先退到「1 枚 chip + N」——保证至少一枚模型完整可见
-    if (title < TITLE_MIN && model > modelMin) {
-      const give = Math.min(TITLE_MIN - title, model - modelMin);
-      model -= give;
-      title += give;
-    }
-    setModelCompact(model < modelFull - 0.5);
-    // 1) 还放不下，压 Tokens 的条（不丢数据）
+    // 1) 标题放不下时，先压 Tokens 的条（不丢数据）
     if (title < TITLE_MIN && tokens > tokensMin) {
       const give = Math.min(TITLE_MIN - title, tokens - tokensMin);
       tokens -= give;
@@ -328,13 +412,11 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
       title = W - fixedRest - model - tokens - time;
     }
     // 3) 到地板：所有列都压到极限，表格给最小宽度，窗口不能再窄
-    const floor = fixedRest + modelMin + tokensMin + TIME_MIN + TITLE_MIN;
+    const floor = fixedRest + model + tokensMin + TIME_MIN + TITLE_MIN;
     if (title < TITLE_MIN) {
       title = TITLE_MIN;
       time = TIME_MIN;
       tokens = tokensMin;
-      model = modelMin;
-      setModelCompact(true);
     }
     setTableMinW(W < floor ? floor : undefined);
     setTimeLevel(time >= timeNat - 2 ? 0 : time >= 82 ? 1 : time >= 64 ? 2 : 3);
@@ -342,7 +424,6 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
   }, []);
 
   // 用一份隐藏的 auto 布局副本量每列的自然宽度：width:max-content 保证不被挤压。
-  // 模型列量两次：去掉/加上 model-compact 类，分别得到「两枚 chip」和「一枚 chip + N」的宽度。
   useLayoutEffect(() => {
     const table = tableRef.current;
     if (!table) return;
@@ -357,15 +438,10 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
     clone.style.width = "max-content";
     clone.style.pointerEvents = "none";
     document.body.appendChild(clone);
-    const thWidths = () => [...clone.querySelectorAll("thead th")].map((th) => th.getBoundingClientRect().width);
     clone.classList.remove("time-l1", "time-l2", "time-l3");
-    clone.classList.remove("model-compact");
-    const full = thWidths();
-    clone.classList.add("model-compact");
-    const compact = thWidths();
+    const widths = [...clone.querySelectorAll("thead th")].map((th) => th.getBoundingClientRect().width);
     clone.remove();
-    naturalRef.current = full;
-    modelNatRef.current = { full: full[2], compact: compact[2] };
+    naturalRef.current = widths;
     allocate();
   }, [groups, expanded, withHours, allocate]);
 
@@ -402,7 +478,6 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
           ref={tableRef}
           className={cn(
             "col-gap w-full table-fixed border-separate border-spacing-0",
-            modelCompact && "model-compact",
             timeLevel > 0 && `time-l${timeLevel}`,
           )}
           style={
@@ -479,27 +554,39 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
                     </td>
                     <td className="px-2 py-2">
                       <div className="flex items-center gap-1">
-                        {s.models.slice(0, 2).map((m, i) => (
-                          <span
-                            key={m}
-                            className={cn(
-                              "shrink-0 whitespace-nowrap rounded bg-accent/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground",
-                              i === 1 && "model-chip-2",
-                            )}
-                            title={m}
+                        {s.modelUsage.primary && (
+                          <Hint
+                            className="w-[260px]"
+                            openDelay={400}
+                            content={
+                              <HintText title="主智能体用量最多的模型">
+                                <span className="font-mono">{s.modelUsage.primary.modelId}</span>
+                                <span className="ml-1.5 tabular-nums text-muted-foreground">
+                                  {fmtTokens(s.modelUsage.primary.tokens)} Token
+                                </span>
+                              </HintText>
+                            }
                           >
-                            {m}
-                          </span>
-                        ))}
-                        {s.models.length > 1 && (
-                          <span
-                            className={cn(
-                              "shrink-0 text-[10px] text-muted-foreground",
-                              s.models.length === 2 && "hidden model-plus-when-compact",
-                            )}
+                            <span className="shrink-0 whitespace-nowrap rounded bg-accent/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                              {shortModelId(s.modelUsage.primary.modelId)}
+                            </span>
+                          </Hint>
+                        )}
+                        {s.modelUsage.otherCount > 0 && (
+                          <Hint
+                            content={<ModelUsageCard main={s.modelUsage.main} sub={s.modelUsage.sub} />}
+                            className="w-[280px]"
+                            openDelay={120}
                           >
-                            +{s.models.length - (modelCompact ? 1 : 2)}
-                          </span>
+                            <button
+                              type="button"
+                              onClick={(e) => e.stopPropagation()}
+                              className="shrink-0 rounded px-1 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-clay/40"
+                              aria-label={`查看本次对话的全部 ${s.modelUsage.otherCount + 1} 个模型用量`}
+                            >
+                              +{s.modelUsage.otherCount}
+                            </button>
+                          </Hint>
                         )}
                       </div>
                     </td>
