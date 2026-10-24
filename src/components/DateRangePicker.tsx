@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { CalendarRange } from "lucide-react";
 import type { Range } from "../api";
+import type { Preset } from "../data/requests";
 import { Dropdown, type DropdownOption } from "./Dropdown";
 
-export type Preset = "today" | "yesterday" | "7d" | "30d" | "all" | "custom";
+// 预设类型归数据层所有（请求描述的一部分），这里转出以兼容既有引用
+export type { Preset };
 
 const PRESETS: Array<{ key: Preset; label: string }> = [
   { key: "today", label: "今天" },

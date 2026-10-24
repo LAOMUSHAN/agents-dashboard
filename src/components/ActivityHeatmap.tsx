@@ -6,16 +6,16 @@ import {
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { CalendarDays, ChevronDown, X } from "lucide-react";
+import { CalendarDays, ChevronDown, Loader2, X } from "lucide-react";
 import type { HeatCell } from "../../shared/types";
-import type { Range } from "../api";
+import type { Committed } from "../data/committed";
+import type { ViewRequest } from "../data/requests";
 import { fmtTokens } from "../format";
 import { barScale } from "./ui/data-viz";
 import { Panel } from "./ui/panel";
 import { Segmented } from "./ui/segmented";
 import { cn } from "@/lib/utils";
 
-type Preset = "today" | "yesterday" | "7d" | "30d" | "all" | "custom";
 type Mode = "single" | "dates" | "bars";
 
 type TipBase = {
@@ -452,22 +452,21 @@ function Empty({ label }: { label: string }) {
 }
 
 export function ActivityHeatmap({
-  cells,
-  preset,
-  range,
-  customFrom,
-  customTo,
+  snapshot,
+  pending = false,
 }: {
-  cells: HeatCell[];
-  preset: Preset;
-  range: Range;
-  customFrom: string;
-  customTo: string;
+  snapshot: Committed<ViewRequest, HeatCell[]>;
+  /** 新范围的请求已发出、数据未到：面板继续显示旧快照，只给一个轻提示 */
+  pending?: boolean;
 }) {
+  const { request, data: cells } = snapshot;
+  const { preset, range, customFrom, customTo } = request;
   const today = useMemo(() => startOfDay(new Date()), []);
   const todayKey = dayKey(today);
   const yesterdayKey = dayKey(addDays(today, -1));
   const cellDays = useMemo(() => [...new Set(cells.map((c) => c.day))].sort(), [cells]);
+  // 视图状态（按天/按小时、展开天数、浮层）由父级以 snapshot.request 作为 key 重置。
+  // 不要用 effect 监听范围变化——那会在数据到达前改变形状，正是要避免的错位。
   const [hourView, setHourView] = useState<"day" | "hour">("hour");
   const [visibleDays, setVisibleDays] = useState(7);
 
@@ -632,14 +631,6 @@ export function ActivityHeatmap({
   const [hover, setHover] = useState<CellTip | null>(null);
   const [pinned, setPinned] = useState<CellTip | null>(null);
 
-  // 切换范围后旧的锚点已失效，收起浮层并回到默认的按小时视图
-  useEffect(() => {
-    setHover(null);
-    setPinned(null);
-    setHourView("hour");
-    setVisibleDays(7);
-  }, [preset, range.from, range.to, customFrom, customTo]);
-
   const makeTip = (
     base: TipBase,
     e: ReactMouseEvent<HTMLElement> | ReactFocusEvent<HTMLElement>,
@@ -766,8 +757,18 @@ export function ActivityHeatmap({
               className="h-6 [&_button]:px-2 [&_button]:text-[10px]"
             />
           )}
-          <span className="inline-flex max-w-[300px] items-center gap-1.5 rounded-full border border-border/70 bg-accent/50 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
-            <CalendarDays size={11} className="shrink-0" />
+          <span
+            className={cn(
+              "inline-flex max-w-[300px] items-center gap-1.5 rounded-full border border-border/70 bg-accent/50 px-2.5 py-1 text-[10px] font-medium text-muted-foreground transition-opacity",
+              pending && "opacity-70",
+            )}
+            title={pending ? `${win.label}（正在加载新范围…）` : win.label}
+          >
+            {pending ? (
+              <Loader2 size={11} className="shrink-0 animate-spin" />
+            ) : (
+              <CalendarDays size={11} className="shrink-0" />
+            )}
             <span className="truncate" title={win.label}>
               {win.label}
             </span>

@@ -1,21 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type {
-  AgentStat,
-  ErrorStats,
-  HeatCell,
-  LatencyStat,
-  ModelStat,
-  ModelTrendPoint,
-  MonthPoint,
-  ProjectStat,
-  ProviderStat,
-  ProviderTrendPoint,
-  SourceFilter,
-  SourceStatus,
-  Summary,
-  ToolStat,
-  TrendPoint,
-} from "../shared/types";
+import { useQueryClient } from "@tanstack/react-query";
+import type { HeatCell, SourceFilter } from "../shared/types";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "./api";
 import { fmtNumber, setUsdCnyRate } from "./format";
@@ -40,6 +25,10 @@ import { TitleBar } from "./components/TitleBar";
 import { ToolStatsPanel } from "./components/ToolStatsPanel";
 import { TrendChart } from "./components/TrendChart";
 import { WasteRankPanel } from "./components/WasteRankPanel";
+import type { Committed } from "./data/committed";
+import { dashboardKeys, dashboardViewKey, useDashboardQuery } from "./data/dashboard";
+import type { DashboardRequest, ViewRequest } from "./data/requests";
+import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { getThemeMode, setThemeMode, type ThemeMode } from "./theme";
 import {
   defaultOverviewLayout,
@@ -113,13 +102,60 @@ function getInitialNavCollapsed(): boolean {
 export default function App() {
   const rangeState = useRange();
   const { range } = rangeState;
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [trend, setTrend] = useState<TrendPoint[]>([]);
-  const [modelTrend, setModelTrend] = useState<ModelTrendPoint[]>([]);
-  const [providerTrend, setProviderTrend] = useState<ProviderTrendPoint[]>([]);
-  const [models, setModels] = useState<ModelStat[]>([]);
-  const [projects, setProjects] = useState<ProjectStat[]>([]);
-  const [providers, setProviders] = useState<ProviderStat[]>([]);
+  const [refreshSec, setRefreshSecState] = useState<number>(getRefreshSec);
+  const [source, setSource] = useState<SourceFilter>(getInitialSource);
+  // 隐藏到托盘时暂停刷新与索引；唤回时补一次
+  const [visible, setVisible] = useState(true);
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(getThemeMode);
+  const [tab, setTab] = useState<Tab>(getInitialTab);
+  const [navCollapsed, setNavCollapsed] = useState<boolean>(getInitialNavCollapsed);
+  // 总览模块的顺序与显隐；旧版的「展开更多分析」折叠按钮由设置页取代
+  const [overviewLayout, setOverviewLayout] = useState<OverviewLayout>(() => defaultOverviewLayout());
+  // ui-prefs.json 是整文件写入：保存前先合并已有字段，避免两个设置互相覆盖
+  const prefsRef = useRef<Record<string, unknown>>({});
+  const queryClient = useQueryClient();
+
+  // 请求的完整身份。控件用实时值；视图只用快照里的 request。
+  const request = useMemo<DashboardRequest>(
+    () => ({
+      preset: rangeState.preset,
+      range,
+      customFrom: rangeState.customFrom,
+      customTo: rangeState.customTo,
+      source,
+    }),
+    [rangeState.preset, range, rangeState.customFrom, rangeState.customTo, source],
+  );
+  const debouncedRequest = useDebouncedValue(request, 120);
+  const dashboard = useDashboardQuery(debouncedRequest, {
+    enabled: visible,
+    refetchInterval: visible ? refreshSec * 1000 : false,
+  });
+  // 快照 = 请求描述 + 数据；切换范围时这里仍是上一个快照，直到新数据到达。
+  const snapshot = dashboard.data;
+  const payload = snapshot?.data;
+  const busy = dashboard.isFetching;
+  const loadError = dashboard.error ? String(dashboard.error) : null;
+
+  const summary = payload?.summary ?? null;
+  const trend = payload?.trend ?? [];
+  const modelTrend = payload?.modelTrend ?? [];
+  const providerTrend = payload?.providerTrend ?? [];
+  const models = payload?.models ?? [];
+  const projects = payload?.projects ?? [];
+  const providers = payload?.providers ?? [];
+  const tools = payload?.tools ?? [];
+  const agents = payload?.agents ?? [];
+  const errors = payload?.errors ?? null;
+  const latency = payload?.latency ?? [];
+  const activity = payload?.activity ?? [];
+  const monthlyTrend = payload?.monthlyTrend ?? [];
+  const sources = payload?.sources ?? [];
+  const capabilities = payload?.capabilities ?? [];
+  // 数据视图用已提交的请求；控件用实时值。短暂不一致是刻意的。
+  const committedSource = snapshot?.request.source ?? source;
+  const committedRange = snapshot?.request.range ?? range;
+
   // 趋势图图例用展示名；同名供应商（同一中转被两个源使用）追加来源后缀
   const providerNames = useMemo(() => {
     const counts = new Map<string, number>();
@@ -144,30 +180,7 @@ export default function App() {
     }
     return [...map.entries()].map(([id, v]) => ({ id, ...v }));
   }, [models]);
-  const [tools, setTools] = useState<ToolStat[]>([]);
-  const [agents, setAgents] = useState<AgentStat[]>([]);
-  const [errors, setErrors] = useState<ErrorStats | null>(null);
-  const [latency, setLatency] = useState<LatencyStat[]>([]);
-  const [activity, setActivity] = useState<HeatCell[]>([]);
-  const [monthlyTrend, setMonthlyTrend] = useState<MonthPoint[]>([]);
-  const [reloadKey, setReloadKey] = useState(0);
-  const [refreshSec, setRefreshSecState] = useState<number>(getRefreshSec);
-  const [source, setSource] = useState<SourceFilter>(getInitialSource);
-  const [sources, setSources] = useState<SourceStatus[]>([]);
-  const [capabilities, setCapabilities] = useState<string[]>([]);
-  // 隐藏到托盘时暂停刷新与索引；唤回时补一次
-  const [visible, setVisible] = useState(true);
-  const [themeMode, setThemeModeState] = useState<ThemeMode>(getThemeMode);
-  const [tab, setTab] = useState<Tab>(getInitialTab);
-  const [navCollapsed, setNavCollapsed] = useState<boolean>(getInitialNavCollapsed);
-  // 总览模块的顺序与显隐；旧版的「展开更多分析」折叠按钮由设置页取代
-  const [overviewLayout, setOverviewLayout] = useState<OverviewLayout>(() => defaultOverviewLayout());
-  const [loading, setLoading] = useState(false);
-  // 后端查询失败时把原因留在界面上：以前只 console.error，整页会停在空数据，
-  // 看起来像「应用没数据」而不是「查询出错」
-  const [loadError, setLoadError] = useState<string | null>(null);
-  // ui-prefs.json 是整文件写入：保存前先合并已有字段，避免两个设置互相覆盖
-  const prefsRef = useRef<Record<string, unknown>>({});
+
   const themeOpt = THEME_OPTIONS.find((o) => o.value === themeMode);
 
   const switchTab = (t: Tab) => {
@@ -241,7 +254,7 @@ export default function App() {
       .catch(() => undefined);
   }, []);
 
-  // 托盘隐藏/唤回：隐藏时停掉 5 秒刷新与 DSH 索引，唤回立即补一次。
+  // 托盘隐藏/唤回：隐藏时停掉刷新与 DSH 索引，唤回立即补一次。
   // App 退出后进程结束，不会留下任何后台活动。
   useEffect(() => {
     let unHide: UnlistenFn | undefined;
@@ -251,7 +264,7 @@ export default function App() {
       .catch(() => undefined);
     listen("window-shown", () => {
       setVisible(true);
-      setReloadKey((k) => k + 1);
+      void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
     })
       .then((u) => (unShow = u))
       .catch(() => undefined);
@@ -259,88 +272,21 @@ export default function App() {
       unHide?.();
       unShow?.();
     };
-  }, []);
+  }, [queryClient]);
 
-  // 汇率:金额统一以美元存储,各费用单元格再按该行价格表的币种换算(改完单价后由 reloadKey 重新拉取)
+  // 汇率：金额统一以美元存储，各费用单元格再按该行价格表的币种换算。
+  // 保存价格时 PricingPanel 会直接刷新模块级汇率；这里只负责启动时取一次。
   useEffect(() => {
     api
       .pricing()
       .then((cfg) => setUsdCnyRate(cfg.usdCnyRate))
       .catch(() => undefined);
-  }, [reloadKey]);
-
-  // 定时刷新:到点触发一次重新加载；隐藏到托盘时停表（唤回由 window-shown 补一次）
-  useEffect(() => {
-    if (!refreshSec || !visible) return;
-    const id = window.setInterval(() => setReloadKey((k) => k + 1), refreshSec * 1000);
-    return () => window.clearInterval(id);
-  }, [refreshSec, visible]);
+  }, []);
 
   const setTheme = (mode: ThemeMode) => {
     setThemeMode(mode);
     setThemeModeState(mode);
   };
-
-  // 切范围/切数据源时保留旧数据，避免 30 天查询期间整页空白；
-  // 刷新 tick 撞上进行中的查询直接跳过，避免请求在阻塞线程池里排队。
-  const lastRangeRef = useRef(range);
-  const lastSourceRef = useRef(source);
-  const busyRef = useRef(false);
-  const reqSeq = useRef(0);
-  useEffect(() => {
-    const rangeChanged = lastRangeRef.current !== range;
-    const sourceChanged = lastSourceRef.current !== source;
-    lastRangeRef.current = range;
-    lastSourceRef.current = source;
-    if (!rangeChanged && !sourceChanged && busyRef.current) return;
-
-    let alive = true;
-    const seq = ++reqSeq.current;
-    const timer = window.setTimeout(
-      () => {
-        busyRef.current = true;
-        setLoading(true);
-        api
-          .dashboard(range, source)
-          .then((d) => {
-            if (!alive || seq !== reqSeq.current) return;
-            setSummary(d.summary);
-            setTrend(d.trend);
-            setModelTrend(d.modelTrend);
-            setProviderTrend(d.providerTrend);
-            setModels(d.models);
-            setProjects(d.projects);
-            setProviders(d.providers);
-            setTools(d.tools);
-            setAgents(d.agents);
-            setErrors(d.errors);
-            setLatency(d.latency);
-            setActivity(d.activity);
-            setMonthlyTrend(d.monthlyTrend);
-            setSources(d.sources);
-            setCapabilities(d.capabilities);
-            setLoadError(null);
-          })
-          .catch((e) => {
-            if (alive && seq === reqSeq.current) {
-              console.error("加载仪表盘数据失败", e);
-              setLoadError(String(e));
-            }
-          })
-          .finally(() => {
-            if (seq !== reqSeq.current) return;
-            busyRef.current = false;
-            if (alive) setLoading(false);
-          });
-      },
-      rangeChanged || sourceChanged ? 120 : 0,
-    );
-
-    return () => {
-      alive = false;
-      window.clearTimeout(timer);
-    };
-  }, [range, reloadKey, source]);
 
   const navItem = (t: (typeof TABS)[number]) => {
     const active = tab === t.value;
@@ -387,7 +333,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      <TitleBar title={currentTab.label} hint={TAB_HINTS[tab]} busy={loading}>
+      <TitleBar title={currentTab.label} hint={TAB_HINTS[tab]} busy={busy}>
         {tab !== "settings" && (
           <SourceScope value={source} onChange={setSourceScope} sources={sources} />
         )}
@@ -486,7 +432,14 @@ export default function App() {
                       );
                       break;
                     case "summary":
-                      node = <SummaryCards summary={summary} trend={trend} capabilities={capabilities} source={source} />;
+                      node = (
+                        <SummaryCards
+                          summary={summary}
+                          trend={trend}
+                          capabilities={capabilities}
+                          source={committedSource}
+                        />
+                      );
                       break;
                     case "trend":
                       node = <TrendChart points={trend} monthly={monthlyTrend} />;
@@ -500,17 +453,23 @@ export default function App() {
                     case "context":
                       node = <ContextComposition summary={summary} tools={tools} />;
                       break;
-                    case "activity":
+                    case "activity": {
+                      // 视图的形状/标签只从快照的 request 推导；key 变才重挂载，
+                      // 因此入场动画一定发生在数据到齐之后，后台刷新不会重播。
+                      const activityRequest = snapshot?.request ?? request;
+                      const activitySnapshot: Committed<ViewRequest, HeatCell[]> = {
+                        request: activityRequest,
+                        data: activity,
+                      };
                       node = (
                         <ActivityHeatmap
-                          cells={activity}
-                          preset={rangeState.preset}
-                          range={range}
-                          customFrom={rangeState.customFrom}
-                          customTo={rangeState.customTo}
+                          key={dashboardViewKey(activityRequest)}
+                          snapshot={activitySnapshot}
+                          pending={dashboard.isPlaceholderData && dashboard.isFetching}
                         />
                       );
                       break;
+                    }
                     case "agents":
                       node = <AgentStatsPanel stats={agents} />;
                       break;
@@ -563,7 +522,13 @@ export default function App() {
             {tab === "settings" && (
               <>
                 <OverviewModulesPanel layout={overviewLayout} onChange={updateOverviewLayout} />
-                <PricingPanel range={range} models={models} onSaved={() => setReloadKey((k) => k + 1)} />
+                <PricingPanel
+                  range={committedRange}
+                  models={models}
+                  onSaved={() => {
+                    void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
+                  }}
+                />
               </>
             )}
           </div>
