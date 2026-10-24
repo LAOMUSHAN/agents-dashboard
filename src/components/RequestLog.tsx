@@ -552,7 +552,7 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
                         <span className="text-muted-foreground">-</span>
                       )}
                     </td>
-                    <td className="px-2 py-2">
+                    <td className="py-2 pl-2 pr-0">
                       <div className="flex items-center gap-1">
                         {s.modelUsage.primary && (
                           <Hint
@@ -645,12 +645,12 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
                           <td className="px-2 py-1.5">
                             <TimeCell startedAt={r.startedAt} />
                           </td>
-                          <td className="px-2 py-1.5">
+                          <td className="py-1.5 pl-2 pr-0">
                             <span
                               className="inline-block whitespace-nowrap rounded bg-accent/70 px-1.5 py-0.5 font-mono text-[10.5px]"
                               title={r.modelId}
                             >
-                              {r.modelId}
+                              {shortModelId(r.modelId)}
                             </span>
                           </td>
                           <td className={TD_NUM}>
