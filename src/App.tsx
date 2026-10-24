@@ -22,6 +22,7 @@ import { RequestLog } from "./components/RequestLog";
 import { SourceScope } from "./components/SourceScope";
 import { SummaryCards } from "./components/SummaryCards";
 import { TitleBar } from "./components/TitleBar";
+import { TitleHintProvider } from "./components/ui/title-hint";
 import { ToolStatsPanel } from "./components/ToolStatsPanel";
 import { TrendChart } from "./components/TrendChart";
 import { WasteRankPanel } from "./components/WasteRankPanel";
@@ -534,6 +535,7 @@ export default function App() {
           </div>
         </main>
       </div>
+      <TitleHintProvider />
     </div>
   );
 }

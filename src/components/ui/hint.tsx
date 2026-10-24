@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import { cloneElement, type ReactElement, type ReactNode } from "react";
 import { HoverCard as HoverCardPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +48,9 @@ export function Hint({
 }) {
   return (
     <HoverCardPrimitive.Root openDelay={openDelay} closeDelay={closeDelay}>
-      <HoverCardPrimitive.Trigger asChild>{children}</HoverCardPrimitive.Trigger>
+      <HoverCardPrimitive.Trigger asChild>
+        {cloneElement(children, { "data-hint-ignore": "" } as Partial<unknown>)}
+      </HoverCardPrimitive.Trigger>
       <HoverCardPrimitive.Portal>
         <HoverCardPrimitive.Content
           side={side}
