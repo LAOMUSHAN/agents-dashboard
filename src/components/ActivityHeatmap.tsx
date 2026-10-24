@@ -133,9 +133,16 @@ function Metric({ label, value, hint }: { label: string; value: string; hint?: s
   );
 }
 
-function Legend() {
+function Legend({ cap }: { cap?: number }) {
   return (
-    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+    <div
+      className="flex items-center gap-1.5 text-[10px] text-muted-foreground"
+      title={
+        cap && cap > 0
+          ? `色阶按区间内非零小时的 P90 归一化（${fmtTokens(cap)} Token）；超过 P90 为最深色`
+          : undefined
+      }
+    >
       <span>少</span>
       {LEVELS.map((c, i) => (
         <span key={i} className={cn("size-2.5 rounded-[3px]", c)} />
@@ -555,6 +562,7 @@ export function ActivityHeatmap({
         hourTotals: [] as number[],
         total,
         maxCell: 0,
+        colorCap: 0,
         maxHour: 0,
         peakHour: -1,
         activeHours: 0,
@@ -578,6 +586,16 @@ export function ActivityHeatmap({
     const total = hourTotals.reduce((a, b) => a + b, 0);
     let maxCell = 0;
     for (const row of dayMap.values()) for (const v of row) maxCell = Math.max(maxCell, v);
+    // 色阶上限取当前可见行的非零小时 P90：单个尖峰（如 382M）不再把 80%+ 的格子压到最浅一档。
+    // 超过 P90 统一最深色；没有非零小时时回落到 maxCell。展开更多天时与总量/峰值一起重算。
+    const nonZero: number[] = [];
+    for (const row of dayMap.values()) for (const v of row) if (v > 0) nonZero.push(v);
+    nonZero.sort((a, b) => a - b);
+    const p90 =
+      nonZero.length > 0
+        ? nonZero[Math.min(nonZero.length - 1, Math.floor(nonZero.length * 0.9))]
+        : 0;
+    const colorCap = p90 > 0 ? p90 : maxCell;
     const maxHour = Math.max(...hourTotals, 0);
     const peakHour = maxHour > 0 ? hourTotals.indexOf(maxHour) : -1;
     const activeHours = hourTotals.filter((v) => v > 0).length;
@@ -603,6 +621,7 @@ export function ActivityHeatmap({
       hourTotals,
       total,
       maxCell,
+      colorCap,
       maxHour,
       peakHour,
       activeHours,
@@ -625,7 +644,9 @@ export function ActivityHeatmap({
   }, [cells, win]);
 
   const level = (tokens: number) =>
-    tokens <= 0 || agg.maxCell <= 0 ? 0 : Math.min(4, Math.max(1, Math.ceil((tokens / agg.maxCell) * 4)));
+    tokens <= 0 || agg.colorCap <= 0
+      ? 0
+      : Math.min(4, Math.max(1, Math.ceil((tokens / agg.colorCap) * 4)));
 
   const hostRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<CellTip | null>(null);
@@ -994,7 +1015,7 @@ export function ActivityHeatmap({
               <span className="text-[10px] text-muted-foreground">
                 {win.mode === "bars" ? "按天 · 每日总 Token" : win.mode === "single" ? "按小时" : "按小时 · 日期×小时"}
               </span>
-              {win.mode !== "bars" && <Legend />}
+              {win.mode !== "bars" && <Legend cap={agg.colorCap} />}
             </div>
           </>
         )}
