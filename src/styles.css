@@ -991,6 +991,17 @@ th.num {
 }
 
 
+/* 侧栏选中态落位：沿用 CDS 15 阶弹簧，切换标签时抬升的选中块轻微回弹 */
+@keyframes nav-settle {
+  0% { transform: scale(0.985); }
+  55% { transform: scale(1.004); }
+  100% { transform: scale(1); }
+}
+.nav-settle {
+  animation: nav-settle 260ms var(--cds-spring-press);
+  will-change: transform;
+}
+
 /* 侧栏滚动渐隐：只做底部淡出，避免首项被遮 */
 .app-nav {
   --cds-scroll-fade-top: 0px;

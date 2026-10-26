@@ -3,8 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { HeatCell, SourceFilter } from "../shared/types";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "./api";
-import { fmtNumber, setUsdCnyRate } from "./format";
-import { cn } from "@/lib/utils";
+import { setUsdCnyRate } from "./format";
 import { ActivityHeatmap } from "./components/ActivityHeatmap";
 import { AgentStatsPanel } from "./components/AgentStatsPanel";
 import { ContextComposition } from "./components/ContextComposition";
@@ -19,6 +18,7 @@ import { PricingPanel } from "./components/PricingPanel";
 import { ProviderTable } from "./components/ProviderTable";
 import { ProviderTrendChart } from "./components/ProviderTrendChart";
 import { RequestLog } from "./components/RequestLog";
+import { Sidebar, type SidebarGroup } from "./components/Sidebar";
 import { SourceScope } from "./components/SourceScope";
 import { SummaryCards } from "./components/SummaryCards";
 import { TitleBar } from "./components/TitleBar";
@@ -41,8 +41,6 @@ import {
   ClipboardList,
   Contrast,
   Moon,
-  PanelLeftClose,
-  PanelLeftOpen,
   RefreshCw,
   ScrollText,
   Settings,
@@ -77,15 +75,32 @@ function getInitialSource(): SourceFilter {
   return v === "zcode" || v === "dsh" ? v : "all";
 }
 
-// 内容分区:面板较多,按主题拆成标签页避免整页无限滚动
-const TABS = [
-  { value: "overview", label: "总览", icon: ChartNoAxesColumn },
-  { value: "breakdown", label: "用量明细", icon: ClipboardList },
-  { value: "health", label: "健康与性能", icon: Stethoscope },
-  { value: "log", label: "请求日志", icon: ScrollText },
-  { value: "settings", label: "设置", icon: Settings },
-] as const;
-type Tab = (typeof TABS)[number]["value"];
+// 内容分区:面板较多,按主题拆成标签页避免整页无限滚动。
+// 侧栏按「分析 / 系统」两组呈现:前三个是同一份用量的三种切面,后两个是运行与配置。
+type Tab = "overview" | "breakdown" | "health" | "log" | "settings";
+type NavEntry = { value: Tab; label: string; icon: LucideIcon };
+type NavGroup = { id: string; label: string; items: NavEntry[] };
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: "analyze",
+    label: "分析",
+    items: [
+      { value: "overview", label: "总览", icon: ChartNoAxesColumn },
+      { value: "breakdown", label: "用量明细", icon: ClipboardList },
+      { value: "log", label: "请求日志", icon: ScrollText },
+    ],
+  },
+  {
+    id: "system",
+    label: "系统",
+    items: [
+      { value: "health", label: "健康与性能", icon: Stethoscope },
+      { value: "settings", label: "设置", icon: Settings },
+    ],
+  },
+];
+const TABS = NAV_GROUPS.flatMap((g) => g.items);
 const TAB_KEY = "activeTab";
 
 function getInitialTab(): Tab {
@@ -289,39 +304,18 @@ export default function App() {
     setThemeModeState(mode);
   };
 
-  const navItem = (t: (typeof TABS)[number]) => {
-    const active = tab === t.value;
-    return (
-      <button
-        key={t.value}
-        role="tab"
-        aria-selected={active}
-        title={navCollapsed ? t.label : undefined}
-        className={cn(
-          "group relative flex w-full items-center rounded-lg text-[13px] font-medium transition-colors duration-150",
-          navCollapsed ? "h-9 justify-center px-0" : "gap-2.5 px-3 py-2",
-          active
-            ? "bg-accent text-foreground"
-            : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-        )}
-        onClick={() => switchTab(t.value)}
-      >
-        {active && (
-          <span
-            className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-full bg-clay"
-            aria-hidden
-          />
-        )}
-        <t.icon size={16} className={cn("shrink-0", active && "text-clay")} />
-        {!navCollapsed && <span className="truncate">{t.label}</span>}
-        {!navCollapsed && t.value === "health" && errors && errors.error > 0 && (
-          <span className="ml-auto inline-flex items-center rounded-full bg-danger/12 px-1.5 py-px text-[10px] font-semibold tabular-nums text-danger">
-            {fmtNumber(errors.error)}
-          </span>
-        )}
-      </button>
-    );
-  };
+  const navGroups: SidebarGroup[] = NAV_GROUPS.map((group) => ({
+    id: group.id,
+    label: group.label,
+    items: group.items.map((item) => ({
+      value: item.value,
+      label: item.label,
+      icon: item.icon,
+      // 只有健康页有值得常驻的计数：区间内的错误请求数
+      badge: item.value === "health" ? (errors?.error ?? 0) : 0,
+      badgeHint: item.value === "health" ? "个错误请求" : undefined,
+    })),
+  }));
 
   const currentTab = TABS.find((t) => t.value === tab) ?? TABS[0];
   const TAB_HINTS: Record<Tab, string> = {
@@ -333,66 +327,47 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      <TitleBar title={currentTab.label} hint={TAB_HINTS[tab]} busy={busy}>
-        {tab !== "settings" && (
-          <SourceScope value={source} onChange={setSourceScope} sources={sources} />
-        )}
-        <DateRangePicker {...rangeState} />
-        <Dropdown
-          value={refreshSec}
-          options={REFRESH_DROPDOWN_OPTIONS}
-          onChange={setRefreshSec}
-          icon={RefreshCw}
-          title="定时刷新"
-        />
-        <Dropdown
-          value={themeMode}
-          options={THEME_OPTIONS}
-          onChange={setTheme}
-          icon={themeOpt?.icon}
-          title="主题(自动跟随系统)"
-        />
-      </TitleBar>
+    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+      <Sidebar
+        groups={navGroups}
+        active={tab}
+        onSelect={(value) => switchTab(value as Tab)}
+        collapsed={navCollapsed}
+        onToggleCollapsed={toggleNav}
+        version={__APP_VERSION__}
+        status={{
+          scopeLabel: source === "all" ? "全部来源" : source === "dsh" ? "仅 DSH" : "仅 zcode",
+          sources,
+          refreshSec,
+          updatedAt: dashboard.dataUpdatedAt || undefined,
+          busy,
+        }}
+      />
 
-      <div className="flex min-h-0 flex-1">
-        <aside
-          className={cn(
-            "flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar transition-[width] duration-200",
-            navCollapsed ? "w-16" : "w-[208px]",
+      {/* 顶栏属于内容列：与侧栏顶行同高、共用竖分隔线，窗口左侧只有侧栏一个身份区 */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TitleBar title={currentTab.label} hint={TAB_HINTS[tab]} busy={busy}>
+          {tab !== "settings" && (
+            <SourceScope value={source} onChange={setSourceScope} sources={sources} />
           )}
-        >
-          <div
-            className={cn(
-              "flex h-10 items-center border-b border-sidebar-border",
-              navCollapsed ? "justify-center px-2" : "justify-between px-4",
-            )}
-          >
-            {!navCollapsed && (
-              <span className="text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
-                导航
-              </span>
-            )}
-            {!navCollapsed && (
-              <span className="font-mono text-[9px] text-muted-foreground/70">v{__APP_VERSION__}</span>
-            )}
-          </div>
-          <nav className="app-nav cds-scroll-fade flex-1 space-y-1 overflow-y-auto px-3 py-3" role="tablist">
-            {TABS.map(navItem)}
-          </nav>
-          <div className="border-t border-sidebar-border p-3">
-            <button
-              className="flex h-8 w-full items-center justify-center gap-2 rounded-lg text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              onClick={toggleNav}
-              title={navCollapsed ? "展开侧栏" : "收起"}
-            >
-              {navCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-              {!navCollapsed && <span>收起</span>}
-            </button>
-          </div>
-        </aside>
+          <DateRangePicker {...rangeState} />
+          <Dropdown
+            value={refreshSec}
+            options={REFRESH_DROPDOWN_OPTIONS}
+            onChange={setRefreshSec}
+            icon={RefreshCw}
+            title="定时刷新"
+          />
+          <Dropdown
+            value={themeMode}
+            options={THEME_OPTIONS}
+            onChange={setTheme}
+            icon={themeOpt?.icon}
+            title="主题(自动跟随系统)"
+          />
+        </TitleBar>
 
-        <main className="min-w-0 flex-1 overflow-y-auto">
+        <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-5 pb-16 pt-5">
             {loadError && (
               <div

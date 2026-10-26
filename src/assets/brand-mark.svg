@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Agents Dashboard">
+  <!-- 纯色陶土圆角方块：不用渐变，层次靠三根柱子的固定明度台阶 -->
+  <rect width="1024" height="1024" rx="228" fill="#d97757"/>
+
+  <!-- 用量柱：中间最高最亮，两侧是固定透明度（对应界面热力图的五档色阶） -->
+  <g fill="#fdf7f2">
+    <path d="M 217 745 L 217 565 A 75 75 0 0 1 367 565 L 367 745 Z" opacity="0.6"/>
+    <path d="M 437 745 L 437 340 A 75 75 0 0 1 587 340 L 587 745 Z"/>
+    <path d="M 657 745 L 657 480 A 75 75 0 0 1 807 480 L 807 745 Z" opacity="0.78"/>
+  </g>
+</svg>

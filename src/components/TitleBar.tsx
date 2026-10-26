@@ -1,11 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Copy, Minus, Square, X } from "lucide-react";
+import { appWindow, toggleMaximize } from "@/lib/window";
 import { cn } from "@/lib/utils";
 
 /**
- * 无边框窗口的顶栏：左侧是拖拽区（双击最大化），右侧放业务控件与窗口按钮。
- * 参考 CDS 桌面架构：45–48px 拖拽带、控件区与拖拽区物理隔离。
+ * 内容列顶栏：页面标题 + 业务控件 + 窗口按钮。
+ *
+ * 它属于右侧内容列，不再横跨整窗——侧栏是独立的全高列（见 Sidebar），
+ * 两者顶行同为 48px，共用一条竖分隔线，窗口左侧因此只有一个身份区。
  */
 export function TitleBar({
   title,
@@ -21,7 +23,7 @@ export function TitleBar({
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
-    const w = tauriWindow();
+    const w = appWindow();
     if (!w) return;
     let unlisten: (() => void) | undefined;
     w.isMaximized()
@@ -40,7 +42,7 @@ export function TitleBar({
   }, []);
 
   const act = (kind: "minimize" | "maximize" | "close") => {
-    const w = tauriWindow();
+    const w = appWindow();
     if (!w) return;
     if (kind === "minimize") void w.minimize();
     if (kind === "maximize") void w.toggleMaximize();
@@ -48,19 +50,24 @@ export function TitleBar({
   };
 
   return (
-    <header className="relative z-40 flex h-12 shrink-0 items-stretch border-b border-border bg-surface-0 select-none">
+    <header className="relative z-40 flex h-12 shrink-0 items-stretch border-b border-border bg-background select-none">
       <div
         data-tauri-drag-region
-        className="flex h-full min-w-0 flex-1 items-center gap-2.5 px-3"
-        onDoubleClick={() => act("maximize")}
+        className="flex h-full min-w-0 flex-1 items-center gap-2 pl-5 pr-3"
+        onDoubleClick={toggleMaximize}
       >
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-clay-soft text-[11px] font-bold text-clay">
-          A
+        <span
+          data-tauri-drag-region
+          className="truncate text-[14px] font-semibold tracking-[-0.01em] text-foreground"
+        >
+          {title}
         </span>
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate text-[12px] font-semibold">{title}</span>
-          <span className="hidden truncate text-[11px] text-muted-foreground sm:inline">{hint}</span>
-        </div>
+        <span
+          data-tauri-drag-region
+          className="hidden min-w-0 truncate text-[11.5px] text-muted-foreground sm:inline"
+        >
+          {hint}
+        </span>
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5 px-3">{children}</div>
@@ -111,10 +118,4 @@ function WinButton({
       {children}
     </button>
   );
-}
-
-/** 浏览器里跑 Vite 时没有 Tauri 运行时，返回 null 让按钮静默降级 */
-function tauriWindow() {
-  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return null;
-  return getCurrentWindow();
 }
