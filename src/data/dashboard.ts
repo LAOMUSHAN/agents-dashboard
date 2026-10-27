@@ -10,8 +10,10 @@ export type DashboardSnapshot = Committed<DashboardRequest, DashboardPayload>;
 export const dashboardKeys = {
   all: ["dashboard"] as const,
   /**
-   * 查询身份 = 请求描述。范围、自定义日期、数据源任何一项变化都会得到新 key；
-   * 5 秒刷新沿用同一个 key，因此不会触发视图重挂载。
+   * 查询身份 = 请求描述。范围、自定义日期、数据源、实时速度窗口任何一项变化
+   * 都会得到新 key；同一 key 的定时刷新不会触发视图重挂载。
+   * rateWindowSec 也在 key 里：改刷新间隔要立刻按新窗口取一次数，
+   * 但视图重挂载用的是 dashboardViewKey（不含它），所以不会重播入场动画。
    */
   request: (request: DashboardRequest) =>
     [
@@ -22,15 +24,23 @@ export const dashboardKeys = {
       request.range.to ?? null,
       request.customFrom,
       request.customTo,
+      request.rateWindowSec,
     ] as const,
 };
 
 /**
  * 视图重挂载用的稳定 key（包含数据源，因为「全部」范围的行数也可能随源变化）。
- * 只有请求变化才变；同一请求的后台刷新不会重播入场动画。
+ * 只有范围/数据源变化才变；改刷新间隔、同一请求的后台刷新都不会重播入场动画。
  */
 export function dashboardViewKey(request: DashboardRequest): string {
-  return JSON.stringify(dashboardKeys.request(request));
+  return JSON.stringify([
+    request.source,
+    request.preset,
+    request.range.from ?? null,
+    request.range.to ?? null,
+    request.customFrom,
+    request.customTo,
+  ]);
 }
 
 export function dashboardQuery(request: DashboardRequest) {
@@ -40,7 +50,7 @@ export function dashboardQuery(request: DashboardRequest) {
     // 上一个快照（含它自己的 request），视图因此不会拿新范围去套旧数据。
     queryFn: async (): Promise<DashboardSnapshot> => ({
       request,
-      data: await api.dashboard(request.range, request.source),
+      data: await api.dashboard(request.range, request.source, request.rateWindowSec),
     }),
     placeholderData: keepPreviousData,
   });

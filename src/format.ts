@@ -109,6 +109,20 @@ export function fmtSpeed(n: number | null | undefined): string {
 }
 
 /**
+ * 速率的顶栏展示：≥1000 用 k/M 缩写，<1000 走 fmtSpeed 的小数位规则。
+ * 不能直接用 fmtTokens——它对 <1000 的值是 String(v)，会把 50.47336942755826 原样吐出来。
+ */
+export function fmtRate(n: number | null | undefined): string {
+  const v = n ?? 0;
+  if (!isFinite(v)) return "-";
+  if (v === 0) return "0";
+  const abs = Math.abs(v);
+  if (abs >= 1e6) return (v / 1e6).toFixed(2) + "M";
+  if (abs >= 1e3) return (v / 1e3).toFixed(1) + "k";
+  return fmtSpeed(v);
+}
+
+/**
  * 缓存命中率 = 缓存读 ÷ 总输入。
  * zcode 的 input_tokens 为总 prompt tokens(已含缓存命中部分),
  * cacheRead 是其子集(OpenAI usage 口径),故分母不再叠加 cacheRead。

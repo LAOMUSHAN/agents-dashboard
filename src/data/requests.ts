@@ -18,4 +18,10 @@ export interface ViewRequest {
 /** 仪表盘请求的完整身份：视图描述 + 数据源 */
 export interface DashboardRequest extends ViewRequest {
   source: SourceFilter;
+  /**
+   * 顶栏实时速度的采样窗口（秒），跟随刷新间隔。
+   * 刻意不进 dashboardKeys.request：改刷新频率不该让视图重挂载、重播入场动画，
+   * 由 setRefreshSec 主动 invalidate 一次即可。
+   */
+  rateWindowSec: number;
 }

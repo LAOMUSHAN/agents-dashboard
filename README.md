@@ -73,6 +73,7 @@ Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你�
 - **数据源范围**：全部 / zcode / DSH 三段切换，选择写入 `ui-prefs.json`；同名模型与供应商按来源分行并带徽章
 - **无边框标题栏**：自绘拖拽区与最小化 / 最大化 / 关闭按钮，关闭仍然收进系统托盘
 - **自动刷新**：5 / 30 / 60 / 120 秒，数据静默替换不闪烁；隐藏到托盘时暂停
+- **实时 Token 速度**：标题栏常驻徽标，显示最近一个刷新周期内完成调用的 token 总量 ÷ 窗口秒数（输入 + 输出，按完成时刻归属）；悬停看输出速率、输入 / 输出 / 缓存读分项、请求与会话数
 - **主题**：浅色 / 深色 / 自动跟随系统
 - **总览**：洞察条、4 张主指标卡（迷你趋势 + 区间涨跌）、可展开的次指标卡、用量趋势、按模型与供应商的堆叠柱趋势（Token/费用）、上下文构成双环图、活跃时段（按小时日期×小时热力图 + 按天每日 Token 柱）、代理工作流对比、浪费指数排行
 - **用量明细**：供应商 / 模型 / 项目三个视角的完整指标表，带占比条与命中率药丸，表头吸顶
@@ -92,7 +93,7 @@ Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你�
 | zcode | `~/.zcode/cli/db/db.sqlite` | 只读打开原库 |
 | DSH | `~/.dsh/sessions/<项目>/<会话>/session[.v4].jsonl.zstd` | 流式解压多帧 zstd，索引到本机 `dsh-index.sqlite` |
 
-- DSH 索引文件：`%APPDATA%\io.github.laomushan.agents-dashboard\dsh-index.sqlite`（macOS 为 `~/Library/Application Support/io.github.laomushan.agents-dashboard/dsh-index.sqlite`）。首次查询建索引（本机 146 个文件约 2 秒），之后按文件大小/修改时间增量更新，10 秒节流。
+- DSH 索引文件：`%APPDATA%\io.github.laomushan.agents-dashboard\dsh-index.sqlite`（macOS 为 `~/Library/Application Support/io.github.laomushan.agents-dashboard/dsh-index.sqlite`）。首次查询建索引（本机 146 个文件约 2 秒），之后按文件大小/修改时间增量更新，2 秒节流（顶栏实时速度按刷新间隔采样，节流更长会让 5 秒窗口周期性掉回 0）。
 - 两个源都只读；DSH 的供应商/模型配置由 DSH 自己管理。
 - **没有后台服务、计划任务或开机自启**：索引更新只发生在界面查询时；窗口隐藏到托盘后暂停刷新与索引，退出应用后不再有任何活动。
 - 聚合口径：请求数、会话数、token、费用直接相加；速度、首 token、延迟分位数按来源分别计算后再展示（同名模型会出现两行并带来源徽章），避免把两个源的耗时混成一个平均值。

@@ -266,6 +266,37 @@ export interface SourceStatus {
   error: string | null;
 }
 
+/**
+ * 实时 Token 速度：最近 windowSec 秒内，已完成调用的输出按「解码段与窗口的重叠比例」
+ * 摊分，再除以窗口内有调用在跑的墙钟并集。窗口长度等于界面上的刷新间隔。
+ */
+export interface TokenRate {
+  windowSec: number;
+  /** 窗口起点 / 采样时刻（epoch ms） */
+  windowFrom: number;
+  sampledAt: number;
+  /** 窗口内摊分到的 token 总量（输入 + 输出，仅作参考） */
+  tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** 其中缓存读（输入的子集，不叠加） */
+  cacheReadTokens: number;
+  /** 窗口平均（总量 ÷ 窗口秒数），仅作参考 */
+  tokensPerSec: number;
+  outputTokensPerSec: number;
+  /** 窗口内有调用在跑的墙钟并集（毫秒）：从 started_at 到完成，含预填充段 */
+  activeMs: number;
+  /** 总速度（tok/s）= 窗口内输出 ÷ 忙碌并集秒数；多会话并行时叠加，是顶栏主数字 */
+  activeTokensPerSec: number;
+  /** 解码速度 = Σ输出 ÷ Σ解码时长（不含预填充，不叠加并行；DSH 会话底栏同口径） */
+  decodeTokensPerSec: number;
+  /** 平均并发 = Σ调用耗时 ÷ 忙碌并集时长；1 表示没有并行 */
+  concurrency: number;
+  /** 窗口内完成的调用数 / 其中的会话数 */
+  requests: number;
+  sessions: number;
+}
+
 /** 一次刷新返回的全部面板数据(后端 get_dashboard 合并命令,同一数据库快照) */
 export interface DashboardPayload {
   summary: Summary;
@@ -285,6 +316,8 @@ export interface DashboardPayload {
   sources: SourceStatus[];
   /** 聚合范围下不完整的指标（如 DSH 不提供 reasoning tokens） */
   capabilities: string[];
+  /** 实时 Token 速度；调用方没给窗口长度时为 null */
+  tokenRate?: TokenRate | null;
 }
 
 /** 单个工具的调用统计(tool_usage 表) */

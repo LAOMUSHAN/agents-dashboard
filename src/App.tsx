@@ -23,6 +23,7 @@ import { SourceScope } from "./components/SourceScope";
 import { SummaryCards } from "./components/SummaryCards";
 import { TitleBar } from "./components/TitleBar";
 import { TitleHintProvider } from "./components/ui/title-hint";
+import { TokenRateBadge } from "./components/TokenRateBadge";
 import { ToolStatsPanel } from "./components/ToolStatsPanel";
 import { TrendChart } from "./components/TrendChart";
 import { WasteRankPanel } from "./components/WasteRankPanel";
@@ -135,6 +136,7 @@ export default function App() {
   const [scrolled, setScrolled] = useState(false);
 
   // 请求的完整身份。控件用实时值；视图只用快照里的 request。
+  // rateWindowSec 跟随刷新间隔：顶栏的实时速度就是「最近一个刷新周期」的吞吐。
   const request = useMemo<DashboardRequest>(
     () => ({
       preset: rangeState.preset,
@@ -142,8 +144,9 @@ export default function App() {
       customFrom: rangeState.customFrom,
       customTo: rangeState.customTo,
       source,
+      rateWindowSec: refreshSec,
     }),
-    [rangeState.preset, range, rangeState.customFrom, rangeState.customTo, source],
+    [rangeState.preset, range, rangeState.customFrom, rangeState.customTo, source, refreshSec],
   );
   const debouncedRequest = useDebouncedValue(request, 120);
   const dashboard = useDashboardQuery(debouncedRequest, {
@@ -363,6 +366,11 @@ export default function App() {
           busy={busy}
           scrolled={scrolled}
         >
+          <TokenRateBadge
+            rate={payload?.tokenRate ?? null}
+            windowSec={refreshSec}
+            pending={dashboard.isPending}
+          />
           {tab !== "settings" && (
             <SourceScope value={source} onChange={setSourceScope} sources={sources} />
           )}

@@ -477,6 +477,39 @@ pub struct MonthPoint {
     pub cost: f64,
 }
 
+/// 实时 Token 速度：最近 `window_sec` 秒内，已完成调用的输出按「解码段与窗口的重叠
+/// 比例」摊分，再除以窗口内有调用在跑的墙钟并集。窗口长度等于前端设定的刷新间隔。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenRate {
+    /// 采样窗口长度（秒）
+    pub window_sec: i64,
+    /// 窗口起点 / 采样时刻（epoch ms）
+    pub window_from: i64,
+    pub sampled_at: i64,
+    /// 窗口内摊分到的 token 总量（输入 + 输出，仅作参考）
+    pub tokens: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    /// 其中缓存读（输入的子集，不叠加）
+    pub cache_read_tokens: i64,
+    /// 窗口平均（总量 ÷ 窗口秒数），仅作参考
+    pub tokens_per_sec: f64,
+    pub output_tokens_per_sec: f64,
+    /// 窗口内有调用在跑的墙钟并集（毫秒）：从 started_at 到完成，含预填充段
+    pub active_ms: i64,
+    /// 总速度（tok/s）= 窗口内输出 ÷ 忙碌并集秒数，与总览「总速度」同口径，
+    /// 多会话并行时叠加，是顶栏主数字
+    pub active_tokens_per_sec: f64,
+    /// 解码速度 = Σ输出 ÷ Σ解码时长（不含预填充，不叠加并行；DSH 会话底栏同口径）
+    pub decode_tokens_per_sec: f64,
+    /// 平均并发 = Σ调用耗时 ÷ 忙碌并集时长；1 表示没有并行
+    pub concurrency: f64,
+    /// 窗口内完成的调用数 / 其中的会话数
+    pub requests: i64,
+    pub sessions: i64,
+}
+
 /// 仪表盘一次性返回的全部数据：一次 IPC、一个数据库快照，
 /// 避免 13 个命令各查一遍导致同一屏里的数字来自不同时刻。
 #[derive(Debug, Serialize)]
@@ -500,4 +533,6 @@ pub struct DashboardPayload {
     /// 聚合范围下不完整的指标（如 DSH 不提供 reasoning tokens）；
     /// 前端据此显示「仅 zcode」而不是把 0 当总数
     pub capabilities: Vec<String>,
+    /// 实时 Token 速度；调用方没有给窗口长度时为 None（旧调用方兼容）
+    pub token_rate: Option<TokenRate>,
 }

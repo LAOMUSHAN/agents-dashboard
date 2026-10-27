@@ -1,6 +1,6 @@
 use crate::pricing;
 use crate::types::*;
-use rusqlite::{params_from_iter, Connection};
+use rusqlite::{params, params_from_iter, Connection};
 use std::collections::{BTreeMap, HashMap};
 
 // model_usage 一行 = 一次模型调用;子代理会话通过 parent_id 挂到父会话的项目上
@@ -281,6 +281,162 @@ pub fn get_summary(conn: &Connection, range: &Range, pricing_path: &std::path::P
         cache_savings_cny,
         unpriced_models,
     })
+}
+
+/// 实时 Token 速度：把每个已完成调用的输出摊到它的解码段上，只统计与采样窗口
+/// 重叠的部分，再除以「窗口内有调用在跑的墙钟并集」。
+///
+/// 分子只取 `output_tokens`：与总览「总速度」同口径。input（DSH 里 94%–99% 是
+/// 缓存读）不参与，否则单次 60k–180k 的预填充会把读数拉到万级。
+///
+/// 分母取忙碌并集（`started_at` → 完成，含预填充），因为总速度的分母是 LLM 耗时；
+/// 多个会话同时跑时并集不叠加、输出叠加，所以 N 个并行约等于 N × 单请求总速度。
+/// 窗口内没有调用在跑就是 0。
+///
+/// `decode_tokens_per_sec` 是另一种参照：Σ输出 ÷ Σ解码时长（不含预填充，不叠加并行），
+/// 与 DSH 会话底栏显示的数一致。
+///
+/// 数据源只写已完成的调用：正在生成的请求要等落库后才补进窗口。下界取 24 小时，
+/// 避免为了找跨窗口的长请求而扫全表（真实 LLM 调用不会持续一整天）。
+pub fn get_token_rate(
+    conn: &Connection,
+    window_sec: i64,
+    now: i64,
+) -> rusqlite::Result<TokenRate> {
+    let window_sec = window_sec.clamp(1, 86_400);
+    let window_from = now - window_sec * 1000;
+    let lower = window_from - 86_400_000;
+
+    let mut stmt = conn.prepare(
+        "SELECT mu.started_at,
+                COALESCE(mu.duration_ms, 0),
+                COALESCE(mu.time_to_first_token_ms, 0),
+                COALESCE(mu.input_tokens, 0),
+                COALESCE(mu.output_tokens, 0),
+                COALESCE(mu.cache_read_input_tokens, 0),
+                mu.session_id
+           FROM model_usage mu
+          WHERE mu.status = 'completed'
+            AND mu.started_at < ?1
+            AND mu.started_at >= ?2
+            AND mu.started_at + COALESCE(mu.duration_ms, 0) > ?3",
+    )?;
+    let rows = stmt.query_map(params![now, lower, window_from], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
+            r.get::<_, String>(6)?,
+        ))
+    })?;
+
+    let mut input_in = 0.0f64;
+    let mut output_in = 0.0f64;
+    let mut cache_read_in = 0.0f64;
+    let mut busy_spans: Vec<(i64, i64)> = Vec::new();
+    let mut busy_ms_total = 0i64;
+    let mut decode_ms_total = 0i64;
+    let mut sessions = std::collections::HashSet::new();
+    let mut requests = 0i64;
+
+    for row in rows {
+        let (start, duration, ttft, input, output, cache_read, sid) = row?;
+        let end = start + duration;
+        let decode_start = start + ttft;
+        requests += 1;
+        sessions.insert(sid);
+
+        // 输入：预填充段；无 TTFT 时按开始时刻的瞬时事件（只作参考，不进主数字）
+        let input_frac = if ttft <= 0 || ttft >= duration {
+            if start >= window_from && start < now { 1.0 } else { 0.0 }
+        } else {
+            overlap_ms(start, start + ttft, window_from, now) as f64 / ttft as f64
+        };
+        input_in += input as f64 * input_frac;
+        cache_read_in += cache_read as f64 * input_frac;
+
+        // 输出：解码段；无解码段时按开始时刻的瞬时事件
+        if duration > ttft {
+            let overlap = overlap_ms(decode_start, end, window_from, now);
+            output_in += output as f64 * overlap as f64 / (duration - ttft) as f64;
+            decode_ms_total += overlap;
+        } else if start >= window_from && start < now {
+            output_in += output as f64;
+        }
+
+        // 忙碌区间：整次调用与窗口的交集（含预填充），总速度的分母
+        let busy_start = start.max(window_from);
+        let busy_end = end.min(now);
+        if busy_end > busy_start {
+            busy_spans.push((busy_start, busy_end));
+            busy_ms_total += busy_end - busy_start;
+        }
+    }
+
+    // 忙碌区间并集：先按起点排序，再顺序合并重叠区间
+    busy_spans.sort_unstable();
+    let mut active_ms = 0i64;
+    let mut cur: Option<(i64, i64)> = None;
+    for (a, b) in busy_spans {
+        match cur {
+            None => cur = Some((a, b)),
+            Some((ca, cb)) => {
+                if a <= cb {
+                    cur = Some((ca, cb.max(b)));
+                } else {
+                    active_ms += cb - ca;
+                    cur = Some((a, b));
+                }
+            }
+        }
+    }
+    if let Some((ca, cb)) = cur {
+        active_ms += cb - ca;
+    }
+
+    let input_tokens = input_in.round() as i64;
+    let output_tokens = output_in.round() as i64;
+    let cache_read_tokens = cache_read_in.round() as i64;
+    let secs = window_sec as f64;
+    let active_secs = active_ms as f64 / 1000.0;
+    let decode_secs = decode_ms_total as f64 / 1000.0;
+    Ok(TokenRate {
+        window_sec,
+        window_from,
+        sampled_at: now,
+        tokens: input_tokens + output_tokens,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        tokens_per_sec: (input_in + output_in) / secs,
+        output_tokens_per_sec: output_in / secs,
+        active_ms,
+        active_tokens_per_sec: if active_secs > 0.0 {
+            output_in / active_secs
+        } else {
+            0.0
+        },
+        decode_tokens_per_sec: if decode_secs > 0.0 {
+            output_in / decode_secs
+        } else {
+            0.0
+        },
+        concurrency: if active_ms > 0 {
+            busy_ms_total as f64 / active_ms as f64
+        } else {
+            0.0
+        },
+        requests,
+        sessions: sessions.len() as i64,
+    })
+}
+
+/// 半开区间的重叠毫秒数：`max(0, min(b, hi) - max(a, lo))`
+fn overlap_ms(a: i64, b: i64, lo: i64, hi: i64) -> i64 {
+    (b.min(hi) - a.max(lo)).max(0)
 }
 
 /// 解析时间范围并决定分桶粒度(跨度 ≤24h 按小时,否则按天)
@@ -1620,6 +1776,83 @@ mod tests {
         std::env::temp_dir().join("agents-dashboard-test-pricing.json")
     }
 
+    /// 实时速度的摊分口径：输入落在预填充段、输出落在解码段，跨窗口的请求只算重叠部分
+    #[test]
+    fn token_rate_uses_busy_union_as_denominator() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_usage(
+                session_id TEXT, status TEXT, started_at INTEGER, duration_ms INTEGER,
+                time_to_first_token_ms INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+                cache_read_input_tokens INTEGER
+            );
+            INSERT INTO model_usage VALUES
+                -- 完成于 11000：落在窗口 (5000,15000] 内
+                ('s1','completed',1000,10000,2000,1000,500,300),
+                -- 无耗时：完成时刻 = 开始时刻 12000
+                ('s2','completed',12000,0,0,100,0,0),
+                -- 完成于 21000：窗口右侧之外
+                ('s3','completed',20000,1000,500,999,999,0),
+                -- 完成于 3000：窗口左侧之外（早已结束）
+                ('s4','completed',0,3000,1000,777,777,0),
+                -- 完成于 8000：窗口内
+                ('s5','completed',4000,4000,2000,1000,800,700),
+                -- 非 completed 不参与
+                ('s6','error',13000,0,0,500,500,0);",
+        )
+        .unwrap();
+
+        let rate = get_token_rate(&conn, 10, 15000).unwrap();
+        assert_eq!(rate.window_sec, 10);
+        assert_eq!(rate.window_from, 5000);
+        assert_eq!(rate.sampled_at, 15000);
+        // 输入：s1=0 + s2=100 + s5=500（缓存读按同一比例摊：s5=350）
+        assert_eq!(rate.input_tokens, 600);
+        assert_eq!(rate.cache_read_tokens, 350);
+        // 输出：s1=500×6000/8000 + s2=0 + s5=800
+        assert_eq!(rate.output_tokens, 1175);
+        assert_eq!(rate.tokens, 1775);
+        assert_eq!(rate.requests, 3);
+        assert_eq!(rate.sessions, 3);
+        assert!((rate.tokens_per_sec - 177.5).abs() < 1e-9);
+        assert!((rate.output_tokens_per_sec - 117.5).abs() < 1e-9);
+        // 忙碌并集（含预填充）：s1 [5000,11000] 覆盖 s5 [5000,8000] → 6000ms
+        assert_eq!(rate.active_ms, 6000);
+        // Σ忙碌时长 6000 + 3000 = 9000ms，平均并发 9000/6000
+        assert!((rate.concurrency - 9000.0 / 6000.0).abs() < 1e-9);
+        // 总速度 = 1175 ÷ 6s；解码速度 = 1175 ÷ 8s
+        assert!((rate.active_tokens_per_sec - 1175.0 / 6.0).abs() < 1e-9);
+        assert!((rate.decode_tokens_per_sec - 1175.0 / 8.0).abs() < 1e-9);
+    }
+
+    /// 空窗口返回 0 而不是 NULL；窗口长度越界时被夹到合法区间
+    #[test]
+    fn token_rate_handles_empty_and_clamps_window() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE model_usage(
+                session_id TEXT, status TEXT, started_at INTEGER, duration_ms INTEGER,
+                time_to_first_token_ms INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+                cache_read_input_tokens INTEGER
+            );",
+        )
+        .unwrap();
+        let rate = get_token_rate(&conn, 0, 10_000).unwrap();
+        assert_eq!(rate.window_sec, 1);
+        assert_eq!(rate.tokens, 0);
+        assert_eq!(rate.input_tokens, 0);
+        assert_eq!(rate.output_tokens, 0);
+        assert_eq!(rate.cache_read_tokens, 0);
+        assert_eq!(rate.requests, 0);
+        assert_eq!(rate.sessions, 0);
+        assert_eq!(rate.tokens_per_sec, 0.0);
+        assert_eq!(rate.output_tokens_per_sec, 0.0);
+        assert_eq!(rate.active_ms, 0);
+        assert_eq!(rate.active_tokens_per_sec, 0.0);
+        assert_eq!(rate.decode_tokens_per_sec, 0.0);
+        assert_eq!(rate.concurrency, 0.0);
+    }
+
     /// 直连真实库冒烟:model_usage.id 是 TEXT,行映射类型写错会在这里暴露
     #[test]
     fn request_log_smoke() {
@@ -2047,4 +2280,5 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 }
+
 

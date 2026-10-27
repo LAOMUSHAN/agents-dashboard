@@ -106,24 +106,29 @@ impl Inner {
     }
 
     /// 一次查询返回仪表盘需要的全部数据；同步实现，由命令层放到阻塞线程池执行。
-    /// 13 条查询各自独立只读连接并行跑；连接由统一查询层创建（视图已按 source 过滤）。
+    /// 14 条查询各自独立只读连接并行跑；连接由统一查询层创建（视图已按 source 过滤）。
+    /// `rate_window_sec` 是实时速度的采样窗口（秒），缺省时该字段为 None。
     fn query_dashboard(
         &self,
         range: &types::Range,
         filter: SourceFilter,
+        rate_window_sec: Option<i64>,
     ) -> Result<types::DashboardPayload, AppError> {
         let dsh_stats = self.ensure_dsh(false);
         let p = &self.pricing_path;
         let names = self.provider_names();
-        let mut conns = Vec::with_capacity(13);
-        for _ in 0..13 {
+        let rate_window = rate_window_sec.map(|s| s.clamp(1, 86_400));
+        // 窗口终点与面板查询同一时刻，避免速度指标比面板早/晚一个刷新周期
+        let rate_now = queries::now_ms();
+        let mut conns = Vec::with_capacity(14);
+        for _ in 0..14 {
             conns.push(self.query_conn(filter)?);
         }
         // 每条查询独占一个连接：Connection 不是 Sync，必须 move 进各自线程
-        let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12] =
-            <[rusqlite::Connection; 13]>::try_from(conns).expect("连接数固定为 13");
+        let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13] =
+            <[rusqlite::Connection; 14]>::try_from(conns).expect("连接数固定为 14");
 
-        let (summary, trend, model_trend, provider_trend, models, projects, providers, tools, agents, errors, latency, activity, monthly_trend) =
+        let (summary, trend, model_trend, provider_trend, models, projects, providers, tools, agents, errors, latency, activity, monthly_trend, token_rate) =
             std::thread::scope(|s| -> Result<_, AppError> {
                 let summary = s.spawn(move || queries::get_summary(&c0, range, p));
                 let trend = s.spawn(move || queries::get_trend(&c1, range, p));
@@ -138,6 +143,10 @@ impl Inner {
                 let latency = s.spawn(move || queries::get_latency_stats(&c10, range));
                 let activity = s.spawn(move || queries::get_activity_heatmap(&c11, range));
                 let monthly_trend = s.spawn(move || queries::get_monthly_trend(&c12, range, p));
+                let token_rate = s.spawn(move || match rate_window {
+                    Some(w) => queries::get_token_rate(&c13, w, rate_now).map(Some),
+                    None => Ok(None),
+                });
 
                 Ok((
                     join_query("summary", summary.join())?,
@@ -153,6 +162,7 @@ impl Inner {
                     join_query("latency", latency.join())?,
                     join_query("activity", activity.join())?,
                     join_query("monthly_trend", monthly_trend.join())?,
+                    join_query("token_rate", token_rate.join())?,
                 ))
             })?;
 
@@ -170,6 +180,7 @@ impl Inner {
             latency,
             activity,
             monthly_trend,
+            token_rate,
             sources: self.source_statuses(&dsh_stats),
             capabilities: if filter.includes(sources::SourceId::Dsh) {
                 // DSH 日志没有 reasoning tokens / cache write 常为 0 / tool cancelled 不可辨
@@ -195,18 +206,22 @@ fn join_query<T>(
         .and_then(|v| v.map_err(AppError::from))
 }
 
-/// 一次刷新只走一个命令：13 个查询在同一个阻塞任务里跑完，避免 13 次 IPC 往返。
+/// 一次刷新只走一个命令：14 个查询在同一个阻塞任务里跑完，避免 14 次 IPC 往返。
+/// `rateWindowSec` 是顶栏实时速度的采样窗口，等于界面上的刷新间隔。
 #[tauri::command]
 async fn get_dashboard(
     state: tauri::State<'_, AppState>,
     range: types::Range,
     source: Option<SourceFilter>,
+    rate_window_sec: Option<i64>,
 ) -> Result<types::DashboardPayload, AppError> {
     let inner = state.inner.clone();
     let filter = source.unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || inner.query_dashboard(&range, filter))
-        .await
-        .map_err(|e| AppError::Task(e.to_string()))?
+    tauri::async_runtime::spawn_blocking(move || {
+        inner.query_dashboard(&range, filter, rate_window_sec)
+    })
+    .await
+    .map_err(|e| AppError::Task(e.to_string()))?
 }
 
 #[tauri::command]

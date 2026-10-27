@@ -1,6 +1,6 @@
 [package]
 name = "agents-dashboard"
-version = "0.5.5"
+version = "0.5.6"
 description = "Agents Dashboard —— ZCode 本地用量与费用统计面板"
 license = "MIT"
 edition = "2021"
@@ -36,5 +36,6 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
 
 

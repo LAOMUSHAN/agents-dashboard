@@ -190,7 +190,9 @@ pub struct DshIndexer {
     root: PathBuf,
     db_path: PathBuf,
     budget: Duration,
-    /// 两次增量之间的最小间隔；运行期由界面刷新触发，避免 5 秒刷新反复扫盘
+    /// 两次增量之间的最小间隔；运行期由界面刷新触发，避免同一轮刷新反复扫盘。
+    /// 取 2 秒：顶栏实时速度按刷新间隔（最短 5 秒）采样，10 秒节流会让 5 秒窗口
+    /// 每两轮才有新数据，速度指标会周期性地掉回 0。
     min_interval: Duration,
     last_run: Option<Instant>,
     last_error: Option<String>,
@@ -202,7 +204,7 @@ impl DshIndexer {
             root,
             db_path,
             budget: Duration::from_millis(DEFAULT_BUDGET_MS),
-            min_interval: Duration::from_secs(10),
+            min_interval: Duration::from_secs(2),
             last_run: None,
             last_error: None,
         }
