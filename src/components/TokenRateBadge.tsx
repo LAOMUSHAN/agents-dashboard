@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { TokenRate } from "../../shared/types";
 import { fmtNumber, fmtTimestamp } from "../format";
 import { Hint, HintText } from "./ui/hint";
@@ -11,22 +12,23 @@ import { cn } from "@/lib/utils";
  * 同时跑就是约 N × 100；窗口内没有调用在跑就是 0。
  *
  * 分子刻意不含输入：DSH 一次调用输入 60k–180k（94%–99% 是缓存读），算进去会把
- * 读数拉到万级。输入只作为悬停卡里的参考量。
+ * 读数拉到万级。分母刻意不用整个刷新窗口：5 个对话各跑 10 秒、窗口 120 秒，
+ * 5000 输出 ÷ 120 会把 500 摊成 41（虚低）。
  *
- * 分母刻意不用整个刷新窗口：5 个对话各跑 10 秒、窗口 120 秒，5000 输出 ÷ 120
- * 会把 500 摊成 41（虚低）。并集只统计真正有调用在跑的墙钟。
- *
- * 展示只留数字 + 单位：没有状态点，宽度按「4 位整数 + 1 位小数」自然撑开，
- * 不预留空白。
+ * 胶囊描边是一圈很淡的倒计时进度（剩余时间 = 满格，刷新时归零），悬停卡里也
+ * 有一条同样的进度。展示只留数字 + 单位，宽度按「4 位整数 + 1 位小数」自然撑开。
  */
 export function TokenRateBadge({
   rate,
   windowSec,
+  updatedAt,
   pending,
 }: {
   rate: TokenRate | null;
   /** 采样窗口（秒）= 当前刷新间隔 */
   windowSec: number;
+  /** 最近一次成功取数的时间（epoch ms）；0/缺省时不画倒计时 */
+  updatedAt?: number;
   /** 首次取数中；此时还没有任何快照 */
   pending?: boolean;
 }) {
@@ -34,6 +36,49 @@ export function TokenRateBadge({
   const active = speed > 0;
   const value = rate ? fmtSpeed(speed) : pending ? "…" : "—";
   const activeSecs = (rate?.activeMs ?? 0) / 1000;
+  const intervalMs = Math.max(1, windowSec) * 1000;
+
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const [now, setNow] = useState(() => Date.now());
+
+  // 胶囊宽度随数字变化：量一次，之后跟 ResizeObserver
+  useEffect(() => {
+    const el = trackRef.current;
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setSize({ w: Math.round(r.width), h: Math.round(r.height) });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // 倒计时：200ms 一跳，配合 CSS 线性过渡看起来是连续的
+  useEffect(() => {
+    if (!updatedAt) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 200);
+    return () => window.clearInterval(id);
+  }, [updatedAt]);
+
+  const elapsed = updatedAt ? Math.max(0, now - updatedAt) : 0;
+  const progress = updatedAt ? Math.min(1, elapsed / intervalMs) : 0;
+  const remaining = updatedAt ? Math.max(0, intervalMs - elapsed) : 0;
+  const countdown = updatedAt ? `${(remaining / 1000).toFixed(1)}s` : "—";
+
+  // 圆角矩形周长：两段直边 + 两个半圆。路径起点在顶边左端（左上圆角结束处），
+  // 把 dash 模式向前推「半个顶边」就能让进度从顶部中点开始顺时针生长。
+  const stroke = 1;
+  const r = Math.max(0, (size.h - stroke) / 2);
+  const straightTop = Math.max(0, size.w - stroke - 2 * r);
+  const topMid = straightTop / 2;
+  const perimeter =
+    size.w > 0
+      ? 2 * straightTop + 2 * (size.h - stroke - 2 * r) + 2 * Math.PI * r
+      : 0;
 
   return (
     <Hint
@@ -68,6 +113,16 @@ export function TokenRateBadge({
                   value={`${rate.requests} 个请求 · ${rate.sessions} 个会话`}
                 />
                 <RateRow label="采样" value={fmtTimestamp(rate.sampledAt)} />
+                <RateRow label="下次刷新" value={countdown} />
+              </div>
+              <div
+                aria-hidden
+                className="mt-1 h-[2px] w-full overflow-hidden rounded-full bg-border/50"
+              >
+                <div
+                  className="h-full rounded-full bg-[var(--cds-clay)]/55 transition-[width] duration-200 ease-linear"
+                  style={{ width: `${progress * 100}%` }}
+                />
               </div>
               <p className="mt-2 border-t border-border/60 pt-2 text-[10.5px] leading-relaxed text-muted-foreground">
                 总速度 = 输出 ÷ 忙碌墙钟，与总览「总速度」同口径；解码速度 = 输出 ÷
@@ -83,13 +138,50 @@ export function TokenRateBadge({
       }
     >
       <div
+        ref={trackRef}
         role="status"
-        aria-label={`实时 Token 速度 ${rate ? `${fmtSpeed(speed)} tok/s` : "未知"}`}
+        aria-label={`实时 Token 速度 ${rate ? `${fmtSpeed(speed)} tok/s` : "未知"}${
+          updatedAt ? `，${countdown} 后刷新` : ""
+        }`}
         className={cn(
-          "flex h-7 select-none items-center gap-1 rounded-full px-2.5",
+          "relative flex h-7 select-none items-center gap-1 rounded-full px-2.5",
           "bg-[var(--cds-segmented-track)] transition-colors",
         )}
       >
+        {perimeter > 0 && (updatedAt ?? 0) > 0 && (
+          <svg
+            aria-hidden
+            className="pointer-events-none absolute inset-0"
+            width={size.w}
+            height={size.h}
+          >
+            <rect
+              x={stroke / 2}
+              y={stroke / 2}
+              width={size.w - stroke}
+              height={size.h - stroke}
+              rx={r}
+              fill="none"
+              stroke="var(--cds-border)"
+              strokeOpacity={0.45}
+              strokeWidth={stroke}
+            />
+            <rect
+              x={stroke / 2}
+              y={stroke / 2}
+              width={size.w - stroke}
+              height={size.h - stroke}
+              rx={r}
+              fill="none"
+              stroke="var(--cds-clay)"
+              strokeOpacity={0.55}
+              strokeWidth={stroke}
+              strokeDasharray={`${perimeter * progress} ${perimeter}`}
+              strokeDashoffset={-topMid}
+              style={{ transition: "stroke-dasharray 200ms linear" }}
+            />
+          </svg>
+        )}
         <span
           className={cn(
             "text-[12px] leading-none font-medium tabular-nums",
@@ -115,3 +207,4 @@ function RateRow({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+

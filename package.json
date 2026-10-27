@@ -1,7 +1,7 @@
 {
   "name": "agents-dashboard",
   "private": true,
-  "version": "0.5.6",
+  "version": "0.5.7",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -39,4 +39,5 @@
     "vite": "^6.0.3"
   }
 }
+
 

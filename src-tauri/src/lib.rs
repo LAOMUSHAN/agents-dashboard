@@ -557,15 +557,45 @@ fn webview2_browser_alive() -> bool {
     true
 }
 
-/// WebView2 浏览器进程崩溃后,进程内的 WebView2 环境已经死了,原地重建窗口
+/// 主窗口是否「窗口还在但不回消息」。
+///
+/// AppHangXProcB1 场景下 WebView2 进程并没有退出,只是挂起——按进程存活判定会误认为
+/// 一切正常,而 Windows 已经弹出「程序未响应」的系统模态框。`IsHungAppWindow` 直接
+/// 问窗口管理器,是系统自己判定挂起用的同一套依据。
+#[cfg(windows)]
+fn main_window_hung(hwnd: isize) -> bool {
+    extern "system" {
+        fn IsHungAppWindow(hwnd: isize) -> i32;
+    }
+    unsafe { IsHungAppWindow(hwnd) != 0 }
+}
+
+#[cfg(not(windows))]
+fn main_window_hung(_hwnd: isize) -> bool {
+    false
+}
+
+/// WebView2 浏览器进程崩溃或挂起后,进程内的 WebView2 环境已经死了,原地重建窗口
 /// 拿不到新的浏览器进程(实测只得到一个白窗口),只能重启整个进程。
-/// 重启前记一笔到配置目录,5 分钟内最多自动重启 2 次,避免崩溃循环里反复闪窗。
-fn relaunch_after_crash(app: &tauri::AppHandle) {
-    let marker = app
-        .path()
-        .app_config_dir()
-        .map(|d| d.join("watchdog-restarts.json"))
-        .ok();
+/// 重启前记一笔到配置目录,5 分钟内最多自动重启 3 次,避免崩溃循环里反复闪窗。
+///
+/// `reason` 区分 `crash`(浏览器进程消失)与 `hung`(进程还在但主窗口不回消息),
+/// 写进 `watchdog-events.jsonl` 供事后判断;`watchdog-restarts.json` 只存时间戳,
+/// 保持与旧版本兼容。
+fn relaunch_after_crash(app: &tauri::AppHandle, reason: &str) {
+    let dir = app.path().app_config_dir().ok();
+    if let Some(dir) = &dir {
+        let line = format!("{{\"at\":{},\"reason\":\"{reason}\"}}\n", now_secs());
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("watchdog-events.jsonl"))
+        {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+    let marker = dir.map(|d| d.join("watchdog-restarts.json"));
     if let Some(path) = &marker {
         let now = now_secs();
         let mut recent: Vec<u64> = std::fs::read_to_string(path)
@@ -594,22 +624,67 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// 白屏看门狗:每 2s 探一次 WebView2 浏览器进程。启动给 12s 宽限;
-/// 运行中进程消失超过 2s 且主窗口可见,就自动重启进程恢复界面。
+/// 白屏看门狗:每 2s 探一次 WebView2 浏览器进程。
+///
+/// 两条恢复路径:
+/// - **crash**:进程消失超过 2s 且主窗口可见 → 重启(启动给 12s 宽限);
+/// - **hung**:进程还在但主窗口连续 3 次(约 6s)`IsHungAppWindow` 为真 → 重启。
+///   后者对应 RTSS 注入导致的 AppHangXProcB1,系统已经弹出「程序未响应」对话框,
+///   而旧版看门狗按进程存活判定会一直认为正常。
+///
+/// 启动后 15s 内不做挂起判定,避开 WebView2 初始化期间的正常无响应;
+/// 两次自动重启间隔至少 120s,5 分钟内最多 3 次。
 fn spawn_webview_watchdog(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let start = std::time::Instant::now();
         let mut seen = false;
         let mut missing_since: Option<std::time::Instant> = None;
+        let mut hung_streak = 0u32;
         let mut last_recover: Option<std::time::Instant> = None;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
-            if webview2_browser_alive() {
-                seen = true;
-                missing_since = None;
+
+            if !webview2_browser_alive() {
+                if !seen && start.elapsed() < std::time::Duration::from_secs(12) {
+                    continue;
+                }
+                let visible = app
+                    .get_webview_window("main")
+                    .and_then(|w| w.is_visible().ok())
+                    .unwrap_or(true);
+                if !visible {
+                    continue;
+                }
+                let since = *missing_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() < std::time::Duration::from_secs(2) {
+                    continue;
+                }
+                if last_recover.map_or(true, |t| t.elapsed() > std::time::Duration::from_secs(120)) {
+                    last_recover = Some(std::time::Instant::now());
+                    missing_since = None;
+                    relaunch_after_crash(&app, "crash");
+                }
                 continue;
             }
-            if !seen && start.elapsed() < std::time::Duration::from_secs(12) {
+
+            seen = true;
+            missing_since = None;
+
+            // 进程还在:再看主窗口是否已经挂起
+            if start.elapsed() < std::time::Duration::from_secs(15) {
+                continue;
+            }
+            let hung = app
+                .get_webview_window("main")
+                .and_then(|w| w.hwnd().ok())
+                .map(|h| main_window_hung(h.0 as isize))
+                .unwrap_or(false);
+            if !hung {
+                hung_streak = 0;
+                continue;
+            }
+            hung_streak += 1;
+            if hung_streak < 3 {
                 continue;
             }
             let visible = app
@@ -619,14 +694,10 @@ fn spawn_webview_watchdog(app: tauri::AppHandle) {
             if !visible {
                 continue;
             }
-            let since = *missing_since.get_or_insert_with(std::time::Instant::now);
-            if since.elapsed() < std::time::Duration::from_secs(2) {
-                continue;
-            }
             if last_recover.map_or(true, |t| t.elapsed() > std::time::Duration::from_secs(120)) {
                 last_recover = Some(std::time::Instant::now());
-                missing_since = None;
-                relaunch_after_crash(&app);
+                hung_streak = 0;
+                relaunch_after_crash(&app, "hung");
             }
         }
     });

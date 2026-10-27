@@ -369,6 +369,7 @@ export default function App() {
           <TokenRateBadge
             rate={payload?.tokenRate ?? null}
             windowSec={refreshSec}
+            updatedAt={dashboard.dataUpdatedAt || undefined}
             pending={dashboard.isPending}
           />
           {tab !== "settings" && (
