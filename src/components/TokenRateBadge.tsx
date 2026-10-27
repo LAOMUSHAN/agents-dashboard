@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { TokenRate } from "../../shared/types";
 import { fmtNumber, fmtTimestamp } from "../format";
 import { Hint, HintText } from "./ui/hint";
 import { cn } from "@/lib/utils";
 
+const PATH_SCALE = 1000;
+const CLOSE_DURATION_MS = 120; // 数据到达后补满最后一小段至 100% 的闭环时长
+
 /**
- * 顶栏实时 Token 速度（总速度口径）。
+ * 顶栏实时 Token 速度（总速度口径）+ 描边倒计时进度环。
  *
  * 主数字 = 窗口内**输出**摊分到解码段后 ÷ 「窗口内有调用在跑的墙钟并集」。
  * 与总览「总速度」（输出 ÷ LLM 耗时）同口径：单请求约 100 tok/s，N 个对话真正
@@ -15,52 +18,122 @@ import { cn } from "@/lib/utils";
  * 读数拉到万级。分母刻意不用整个刷新窗口：5 个对话各跑 10 秒、窗口 120 秒，
  * 5000 输出 ÷ 120 会把 500 摊成 41（虚低）。
  *
- * 描边是一圈**正向**倒计时进度：起点在上边中点、顺时针增长、刷新归零。
- * 基准是**请求开始时刻**（`fetchStart`）：请求开始归零、走满即下一次开始，
- * 不受请求耗时影响。
+ * ## 进度环：闭环状态机，不预测周期
  *
- * 驱动方式：`setInterval(50)` 直接写 SVG 属性（20fps，肉眼接近连续）。
- * 早先三种做法都被否掉——
- *   1. `setInterval` + `setState`（0.5.7）：每跳重渲染整张悬停卡，主线程一忙就迟到；
- *   2. `requestAnimationFrame` 直写（0.5.8）：窗口被遮挡时被 WebView2 节流到 1fps；
- *   3. CSS 动画（0.5.9–0.5.11）：时间线在部分环境（RTSS 注入 D3D hook）下不可靠，
- *      画面会停在某帧直到下一次 React 重渲染。
- * 定时器 + 属性直写是唯一不依赖浏览器内部调度的组合：只要主线程还在跑，进度就会走。
+ * 早先七版都在用单一标量 `periodMs` 去线性映射一个带抖动的异步事件
+ * （`p = min(1, elapsed / periodMs)`）。这条路数学上不可能收敛：
+ * 本轮真实周期 < periodMs 时，进度走到 91% 就被新一轮清零（顶部中点留缺口）；
+ * 本轮真实周期 > periodMs 时，`elapsed` 撞上钳制，描边在满圈硬停 0.6–1.5 秒。
+ *
+ * 现在改成三段式，由请求状态驱动，不再预测任何时长：
+ *   1. **推进期**：从上一轮完成起，`intervalMs` 内匀速走到 92%；
+ *   2. **等待期**（超过 interval 或请求在途）：从 92% 指数渐近 99.2%，
+ *      永远在顺时针微动，既不停死也绝不提前撞到 100% 空等；
+ *   3. **闭环期**（`dataUpdatedAt` 更新的瞬间）：用 120ms 把剩余段平滑推满到 100%，
+ *      在抵达 1.000 的下一帧同步换上新的速度数字并归零。**每轮必定满圈闭合**。
+ *
+ * 路径用起点就在顶部中点的 `<path pathLength={1000}>`，不再算周长、不再用
+ * `strokeDashoffset` 偏移起点；数字区锁 `min-w-[5ch]`，胶囊宽度不再随位数抖动，
+ * `d` 属性在运行期恒定。
+ *
+ * 驱动是 `setInterval(33)` + 直接写 SVG 属性，全程零 React 重渲染
+ * （只有闭环结束那一帧 setDisplayRate 一次）。
  */
 export function TokenRateBadge({
   rate,
   windowSec,
-  fetchStart,
+  dataUpdatedAt,
+  isFetching,
   pending,
 }: {
   rate: TokenRate | null;
   /** 采样窗口（秒）= 当前刷新间隔 */
   windowSec: number;
-  /** 最近一次请求开始的时刻（epoch ms）；缺省时不画倒计时 */
-  fetchStart?: number;
+  /** 最近一次数据成功刷新的时间戳（epoch ms） */
+  dataUpdatedAt?: number;
+  /** 当前是否有请求正在执行 */
+  isFetching?: boolean;
   /** 首次取数中；此时还没有任何快照 */
   pending?: boolean;
 }) {
-  const speed = rate?.activeTokensPerSec ?? 0;
+  // 显示快照与环归零严格同步：在 120ms 闭环动画走满 100% 的那一刻才切换显示的数字
+  const [displayRate, setDisplayRate] = useState<TokenRate | null>(rate);
+  const latestRateRef = useRef<TokenRate | null>(rate);
+  latestRateRef.current = rate;
+
+  useEffect(() => {
+    if (!displayRate && rate) {
+      setDisplayRate(rate);
+    }
+  }, [rate, displayRate]);
+
+  const speed = displayRate?.activeTokensPerSec ?? 0;
   const active = speed > 0;
-  const value = rate ? fmtSpeed(speed) : pending ? "…" : "—";
-  const activeSecs = (rate?.activeMs ?? 0) / 1000;
+  const value = displayRate ? fmtSpeed(displayRate.activeTokensPerSec) : pending ? "…" : "—";
+  const activeSecs = (displayRate?.activeMs ?? 0) / 1000;
   const intervalMs = Math.max(1, windowSec) * 1000;
 
   const trackRef = useRef<HTMLDivElement>(null);
   const countdownRef = useRef<HTMLSpanElement>(null);
-  const ringRef = useRef<SVGRectElement>(null);
+  const ringRef = useRef<SVGPathElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
-  const [countdown, setCountdown] = useState("—");
 
-  // 胶囊宽度随数字变化：量一次，之后跟 ResizeObserver
+  // 动画状态机（全部存于 ref，不触发 React 重渲染）
+  const stateRef = useRef<{
+    phase: "running" | "closing";
+    cycleStartMs: number;
+    closeStartMs: number;
+    closeFromP: number;
+    currentP: number;
+    lastUpdatedAt: number;
+  }>({
+    phase: "running",
+    cycleStartMs: Date.now(),
+    closeStartMs: 0,
+    closeFromP: 0,
+    currentP: 0,
+    lastUpdatedAt: dataUpdatedAt ?? 0,
+  });
+
+  const isFetchingRef = useRef(Boolean(isFetching));
+  isFetchingRef.current = Boolean(isFetching);
+
+  // 切换刷新间隔时立即重置周期
   useEffect(() => {
+    const st = stateRef.current;
+    st.phase = "running";
+    st.cycleStartMs = Date.now();
+    st.currentP = 0;
+  }, [intervalMs]);
+
+  // 监听数据到达：触发 closing 阶段，确保必定先走满 100% 再归零并同步更新数字
+  useEffect(() => {
+    if (!dataUpdatedAt) return;
+    const st = stateRef.current;
+    if (st.lastUpdatedAt === 0) {
+      st.lastUpdatedAt = dataUpdatedAt;
+      st.cycleStartMs = Date.now();
+      setDisplayRate(latestRateRef.current);
+      return;
+    }
+    if (dataUpdatedAt !== st.lastUpdatedAt) {
+      st.lastUpdatedAt = dataUpdatedAt;
+      st.phase = "closing";
+      st.closeStartMs = Date.now();
+      st.closeFromP = st.currentP;
+    }
+  }, [dataUpdatedAt]);
+
+  // 测量胶囊尺寸
+  useLayoutEffect(() => {
     const el = trackRef.current;
     if (!el) return;
     const measure = () => {
-      const r = el.getBoundingClientRect();
-      setSize({ w: Math.round(r.width), h: Math.round(r.height) });
+      const rect = el.getBoundingClientRect();
+      const w = Math.round(rect.width);
+      const h = Math.round(rect.height);
+      setSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -68,52 +141,99 @@ export function TokenRateBadge({
     return () => ro.disconnect();
   }, []);
 
-  // 圆角矩形周长：两段直边 + 两个半圆。路径起点在顶边左端（左上圆角结束处），
-  // 把 dash 模式向前推「半个顶边」就能让进度从顶部中点开始顺时针生长。
-  const stroke = 1;
-  const r = Math.max(0, (size.h - stroke) / 2);
-  const straightTop = Math.max(0, size.w - stroke - 2 * r);
-  const topMid = straightTop / 2;
-  const perimeter =
-    size.w > 0
-      ? 2 * straightTop + 2 * (size.h - stroke - 2 * r) + 2 * Math.PI * r
-      : 0;
-
-  // 逐帧推进：50ms 一步（20fps），只改 DOM 属性，不触发 React 渲染。
-  // 文字倒计时同一循环里刷新，但只有整 0.1 秒变化时才 setState。
+  // 主驱动循环（33ms ≈ 30fps，纯 DOM 直写，零 React 重渲染）
   useEffect(() => {
-    if (!fetchStart) {
-      setCountdown("—");
+    if (!dataUpdatedAt) {
       if (countdownRef.current) countdownRef.current.textContent = "—";
       return;
     }
-    const paint = () => {
-      const elapsed = Math.min(intervalMs, Math.max(0, Date.now() - fetchStart));
-      const p = elapsed / intervalMs;
+
+    const applyVisual = (p: number, cdText: string) => {
+      const clamped = Math.max(0, Math.min(1, p));
       const ring = ringRef.current;
-      if (ring && perimeter > 0) {
-        ring.setAttribute("stroke-dasharray", `${perimeter * p} ${perimeter}`);
+      if (ring) {
+        ring.setAttribute(
+          "stroke-dasharray",
+          `${(clamped * PATH_SCALE).toFixed(2)} ${PATH_SCALE}`,
+        );
+        ring.setAttribute("data-p", clamped.toFixed(4));
       }
       const bar = barRef.current;
-      if (bar) bar.style.width = `${p * 100}%`;
-      const remaining = intervalMs - elapsed;
-      const s = remaining > 0 ? `${(remaining / 1000).toFixed(1)}s` : "刷新中…";
-      if (countdownRef.current && countdownRef.current.textContent !== s) {
-        countdownRef.current.textContent = s;
+      if (bar) {
+        bar.style.width = `${(clamped * 100).toFixed(2)}%`;
       }
-      setCountdown((prev) => (prev === s ? prev : s));
+      if (countdownRef.current && countdownRef.current.textContent !== cdText) {
+        countdownRef.current.textContent = cdText;
+      }
+      if (trackRef.current) {
+        trackRef.current.setAttribute("data-p", clamped.toFixed(4));
+        trackRef.current.setAttribute("data-phase", stateRef.current.phase);
+      }
     };
 
-    paint();
-    const id = window.setInterval(paint, 50);
-    window.addEventListener("focus", paint);
-    document.addEventListener("visibilitychange", paint);
+    const tick = () => {
+      const now = Date.now();
+      const st = stateRef.current;
+
+      if (st.phase === "closing") {
+        const dt = now - st.closeStartMs;
+        if (dt < CLOSE_DURATION_MS) {
+          // 线性补满最后一段至 1.000
+          const t = Math.max(0, Math.min(1, dt / CLOSE_DURATION_MS));
+          const p = st.closeFromP + (1 - st.closeFromP) * t;
+          st.currentP = p;
+          applyVisual(p, "0.0s");
+          return;
+        }
+        // 已确保渲染出 100% 满圈（至少 1 帧），同步更新文字并立即归零进入下一轮
+        if (st.currentP < 1) {
+          st.currentP = 1;
+          applyVisual(1, "0.0s");
+          return;
+        }
+        setDisplayRate(latestRateRef.current);
+        st.phase = "running";
+        st.cycleStartMs = now;
+        st.currentP = 0;
+        applyVisual(0, `${(intervalMs / 1000).toFixed(1)}s`);
+        return;
+      }
+
+      // running 阶段：
+      // 0 -> intervalMs 内匀速推到 0.92；之后（请求在途等待期）指数渐近趋向 0.992，永不停顿
+      const elapsed = Math.max(0, now - st.cycleStartMs);
+      const kneeP = 0.92;
+      let p: number;
+      if (elapsed <= intervalMs) {
+        p = (elapsed / intervalMs) * kneeP;
+      } else {
+        const overtime = elapsed - intervalMs;
+        const tau = Math.max(600, intervalMs * 0.15);
+        p = kneeP + (0.992 - kneeP) * (1 - Math.exp(-overtime / tau));
+      }
+      st.currentP = p;
+
+      const remainingMs = Math.max(0, intervalMs - elapsed);
+      const cdText =
+        remainingMs > 0 && !isFetchingRef.current
+          ? `${(remainingMs / 1000).toFixed(1)}s`
+          : "0.1s";
+
+      applyVisual(p, cdText);
+    };
+
+    tick();
+    const id = window.setInterval(tick, 33);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", tick);
     return () => {
       window.clearInterval(id);
-      window.removeEventListener("focus", paint);
-      document.removeEventListener("visibilitychange", paint);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", tick);
     };
-  }, [fetchStart, intervalMs, perimeter]);
+  }, [dataUpdatedAt, intervalMs, size.w, size.h]);
+
+  const d = buildTopMidPillPath(size.w, size.h, 1);
 
   return (
     <Hint
@@ -126,29 +246,32 @@ export function TokenRateBadge({
             多会话并行时叠加，没人跑就是 0。
           </HintText>
 
-          {rate ? (
+          {displayRate ? (
             <>
               <div className="mt-2.5 space-y-1 border-t border-border/60 pt-2">
-                <RateRow label="总速度" value={`${fmtSpeed(rate.activeTokensPerSec)} tok/s`} />
+                <RateRow
+                  label="总速度"
+                  value={`${fmtSpeed(displayRate.activeTokensPerSec)} tok/s`}
+                />
                 <RateRow
                   label="解码速度"
-                  value={`${fmtSpeed(rate.decodeTokensPerSec)} tok/s`}
+                  value={`${fmtSpeed(displayRate.decodeTokensPerSec)} tok/s`}
                 />
                 <RateRow
                   label="并发"
-                  value={`${rate.concurrency.toFixed(2)}× · 忙碌 ${activeSecs.toFixed(1)}s`}
+                  value={`${displayRate.concurrency.toFixed(2)}× · 忙碌 ${activeSecs.toFixed(1)}s`}
                 />
-                <RateRow label="输出" value={`${fmtNumber(rate.outputTokens)} tokens`} />
+                <RateRow label="输出" value={`${fmtNumber(displayRate.outputTokens)} tokens`} />
                 <RateRow
                   label="输入"
-                  value={`${fmtNumber(rate.inputTokens)}（缓存读 ${fmtNumber(rate.cacheReadTokens)}）`}
+                  value={`${fmtNumber(displayRate.inputTokens)}（缓存读 ${fmtNumber(displayRate.cacheReadTokens)}）`}
                 />
                 <RateRow
                   label="完成"
-                  value={`${rate.requests} 个请求 · ${rate.sessions} 个会话`}
+                  value={`${displayRate.requests} 个请求 · ${displayRate.sessions} 个会话`}
                 />
-                <RateRow label="采样" value={fmtTimestamp(rate.sampledAt)} />
-                <RateRow label="下次刷新" value={countdown} valueRef={countdownRef} />
+                <RateRow label="采样" value={fmtTimestamp(displayRate.sampledAt)} />
+                <RateRow label="下次刷新" value={`${windowSec}.0s`} valueRef={countdownRef} />
               </div>
               <div
                 aria-hidden
@@ -176,51 +299,41 @@ export function TokenRateBadge({
       <div
         ref={trackRef}
         role="status"
-        aria-label={`实时 Token 速度 ${rate ? `${fmtSpeed(speed)} tok/s` : "未知"}${
-          fetchStart ? `，${countdown} 后刷新` : ""
-        }`}
+        aria-label={`实时 Token 速度 ${displayRate ? `${fmtSpeed(speed)} tok/s` : "未知"}`}
         className={cn(
           "relative flex h-7 select-none items-center gap-1 rounded-full px-2.5",
           "bg-[var(--cds-segmented-track)] transition-colors",
         )}
       >
-        {perimeter > 0 && (fetchStart ?? 0) > 0 && (
+        {d && (dataUpdatedAt ?? 0) > 0 && (
           <svg
             aria-hidden
             className="pointer-events-none absolute inset-0"
             width={size.w}
             height={size.h}
           >
-            <rect
-              x={stroke / 2}
-              y={stroke / 2}
-              width={size.w - stroke}
-              height={size.h - stroke}
-              rx={r}
+            <path
+              d={d}
               fill="none"
               stroke="var(--cds-border)"
               strokeOpacity={0.45}
-              strokeWidth={stroke}
+              strokeWidth={1}
             />
-            <rect
+            <path
               ref={ringRef}
-              x={stroke / 2}
-              y={stroke / 2}
-              width={size.w - stroke}
-              height={size.h - stroke}
-              rx={r}
+              d={d}
+              pathLength={PATH_SCALE}
               fill="none"
               stroke="var(--cds-clay)"
-              strokeOpacity={0.55}
-              strokeWidth={stroke}
-              strokeDasharray={`0 ${perimeter}`}
-              strokeDashoffset={-topMid}
+              strokeOpacity={0.65}
+              strokeWidth={1}
+              strokeDasharray={`0 ${PATH_SCALE}`}
             />
           </svg>
         )}
         <span
           className={cn(
-            "text-[12px] leading-none font-medium tabular-nums",
+            "inline-block min-w-[5ch] text-right text-[12px] leading-none font-medium tabular-nums",
             active ? "text-foreground" : "text-muted-foreground",
           )}
         >
@@ -230,6 +343,30 @@ export function TokenRateBadge({
       </div>
     </Hint>
   );
+}
+
+/**
+ * 构造以「顶部中点」为原生起点、顺时针闭合的胶囊路径。
+ * 配合 pathLength=1000，无需计算周长与 strokeDashoffset，p=1 时在顶部中点 100% 严密闭合。
+ */
+function buildTopMidPillPath(w: number, h: number, stroke: number): string {
+  if (w <= 0 || h <= 0) return "";
+  const half = stroke / 2;
+  const r = Math.max(0, (h - stroke) / 2);
+  const left = half + r;
+  const right = Math.max(left, w - half - r);
+  const top = half;
+  const bottom = h - half;
+  const midX = w / 2;
+
+  return [
+    `M ${midX} ${top}`,
+    `H ${right}`,
+    `A ${r} ${r} 0 0 1 ${right} ${bottom}`,
+    `H ${left}`,
+    `A ${r} ${r} 0 0 1 ${left} ${top}`,
+    `Z`,
+  ].join(" ");
 }
 
 /** 速率：纯数字 + 1 位小数（4 位整数 + 小数点 + 1 位，正好 5 个数字位；不带千分位逗号） */

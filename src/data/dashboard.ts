@@ -67,5 +67,8 @@ export function useDashboardQuery(
     // 窗口可见但未聚焦（例如放在副屏）时仍按设定刷新；
     // 隐藏到托盘由 enabled/refetchInterval 一起停掉，不会留下后台活动。
     refetchIntervalInBackground: true,
+    // 切窗/截图恢复焦点时不要插一次计划外刷新：它会打断倒计时周期，
+    // 让进度环在任意位置被重置。
+    refetchOnWindowFocus: false,
   });
 }
