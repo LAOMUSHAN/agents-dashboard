@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent } from "react";
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
 import type { SourceStatus } from "../../shared/types";
 import brandMark from "@/assets/brand-mark.svg";
@@ -6,23 +6,26 @@ import { toggleMaximize } from "@/lib/window";
 import { cn } from "@/lib/utils";
 
 /**
- * 侧边栏（CDS 桌面架构）
+ * 侧边栏（统一外壳 + CDS 桌面架构）
  *
- * 全高左列，与右侧内容列的 TitleBar 组成同一套窗口外壳：
- * 顶行同为 48px，竖分隔线从窗口顶端贯到底，应用身份只在这里出现一次。
- * 自上而下三段：身份区（应用名 + 版本 + 收起）、分组导航、运行状态卡。
- * 取舍依据 open-claude-ui 的两条硬约束：
- * - 导航条目无边框，靠行高节奏、Hover 微差与抬升的选中态区分（08 章单边框法则）；
- * - 2.0 高密工作台：32px 行高、16px 图标、13px 标签，分组标签走 11px caption 阶梯。
+ * 全高左列，与右侧内容列共用同一块底色：侧栏不再是「另一块面板」，
+ * 结构只由一条两端淡出的发丝线和留白给出，顶行与内容列同为 44px。
+ * 自上而下三段：身份区（应用名 + 版本 + 收起）、分组导航、运行状态。
+ *
+ * 三条取舍：
+ * - 选中态是块在条目间滑动的共享滑块（transform + 15 阶弹簧），不靠边框；
+ * - 导航条目无边框，靠行高节奏、Hover 微差与滑块区分（CDS 单边框法则）；
+ * - 2.0 高密工作台：30px 行高、16px 图标、12.5px 标签，分组标签走 10.5px caption。
+ * - 「健康与性能」行尾只留一个低干扰状态点；错误数量在页面内看，导航不挂计数。
  */
 export type SidebarItem = {
   value: string;
   label: string;
   icon: LucideIcon;
-  /** 需要引起注意的计数（错误数等），0 不显示 */
-  badge?: number;
-  /** 悬停计数徽标时的说明，例如「个错误请求」 */
-  badgeHint?: string;
+  /** 行尾注意点：只表达「有信号」，具体数字留在页面内 */
+  alert?: boolean;
+  /** 悬停注意点时的说明 */
+  alertHint?: string;
 };
 
 export type SidebarGroup = {
@@ -91,6 +94,9 @@ export function Sidebar({
   status: SidebarStatus;
 }) {
   const navRef = useRef<HTMLElement>(null);
+  // 共享滑块：只记纵坐标，宽度/高度交给 CSS 变量跟随侧栏宽度
+  const [pillTop, setPillTop] = useState<number | null>(null);
+  const [pillReady, setPillReady] = useState(false);
 
   // 垂直 tablist 的 roving focus：方向键在条目间移动，Home/End 跳到首尾
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -117,6 +123,34 @@ export function Sidebar({
               : current - 1;
     nodes[next]?.focus();
   };
+
+  // 滑块落位：读选中条目的矩形，换算成 nav 内容坐标（含滚动量）
+  useLayoutEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const measure = () => {
+      const selected = nav.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
+      if (!selected) {
+        setPillTop(null);
+        return;
+      }
+      const navRect = nav.getBoundingClientRect();
+      const itemRect = selected.getBoundingClientRect();
+      setPillTop(itemRect.top - navRect.top + nav.scrollTop);
+    };
+    measure();
+    // 侧栏宽度动画、窗口缩放都会改变条目矩形；ResizeObserver 逐帧跟随
+    const observer = new ResizeObserver(measure);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [active, collapsed]);
+
+  // 首帧先把滑块放到位置，再开启过渡，避免启动时从顶部滑下来
+  useLayoutEffect(() => {
+    if (pillTop == null || pillReady) return;
+    const frame = requestAnimationFrame(() => setPillReady(true));
+    return () => cancelAnimationFrame(frame);
+  }, [pillTop, pillReady]);
 
   const missing = status.sources.filter((s) => !s.available);
   // 每个源各自的取数形态：zcode 直读实时库，DSH 走增量索引，索引时间就是新鲜度
@@ -155,18 +189,24 @@ export function Sidebar({
     <aside
       data-collapsed={collapsed ? "true" : "false"}
       className={cn(
-        "flex shrink-0 flex-col overflow-hidden border-r border-sidebar-border bg-sidebar",
+        "relative flex shrink-0 flex-col overflow-hidden bg-background",
         "transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]",
-        collapsed ? "w-16" : "w-[232px]",
+        collapsed ? "w-14" : "w-[200px]",
       )}
     >
-      {/* 身份区：与右侧内容列顶栏同为 48px，共用一条竖分隔线；整行是窗口拖拽带 */}
+      {/* 发丝分隔线：从顶栏下沿开始，到窗口底部淡出；顶行因此完全连通 */}
+      <span
+        aria-hidden
+        className="sidebar-divider pointer-events-none absolute bottom-0 right-0 top-11 w-px"
+      />
+
+      {/* 身份区：与右侧内容列顶栏同为 44px；整行是窗口拖拽带 */}
       <div
         data-tauri-drag-region
         onDoubleClick={toggleMaximize}
         className={cn(
-          "flex h-12 shrink-0 items-center",
-          collapsed ? "justify-center px-0" : "gap-1.5 pl-5 pr-2",
+          "relative z-10 flex h-11 shrink-0 items-center",
+          collapsed ? "justify-center" : "gap-1.5 pl-4 pr-2",
         )}
       >
         {collapsed ? (
@@ -174,18 +214,19 @@ export function Sidebar({
             type="button"
             onClick={onToggleCollapsed}
             onDoubleClick={(event) => event.stopPropagation()}
+            title="展开侧栏"
             aria-label="展开侧栏"
-            className="group/toggle relative flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-accent"
+            className="group/toggle relative flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-[var(--cds-alpha-1)]"
           >
             <img
               src={brandMark}
               alt=""
               aria-hidden
               draggable={false}
-              className="size-5 transition-opacity duration-150 group-hover/toggle:opacity-0"
+              className="size-[18px] transition-opacity duration-150 group-hover/toggle:opacity-0"
             />
             <PanelLeftOpen
-              size={16}
+              size={15}
               strokeWidth={1.75}
               className="absolute text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/toggle:opacity-100"
             />
@@ -198,12 +239,12 @@ export function Sidebar({
               aria-hidden
               draggable={false}
               data-tauri-drag-region
-              className="size-5 shrink-0"
+              className="size-[18px] shrink-0"
             />
             {/* 单行词标：与右侧页标题同基线，窗口顶端只有一条水平视线 */}
             <span
               data-tauri-drag-region
-              className="min-w-0 flex-1 truncate text-[13px] font-semibold tracking-[-0.01em] text-foreground"
+              className="min-w-0 flex-1 truncate text-[12.5px] font-semibold tracking-[-0.01em] text-foreground"
             >
               Agents Dashboard
             </span>
@@ -213,32 +254,40 @@ export function Sidebar({
               onDoubleClick={(event) => event.stopPropagation()}
               title="收起侧栏"
               aria-label="收起侧栏"
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
+              className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-[var(--cds-alpha-1)] hover:text-foreground"
             >
-              <PanelLeftClose size={16} strokeWidth={1.75} />
+              <PanelLeftClose size={15} strokeWidth={1.75} />
             </button>
           </>
         )}
       </div>
 
-      {/* 分组导航 */}
+      {/* 分组导航：滑块在条目底下滑动，条目本身保持透明 */}
       <nav
         ref={navRef}
+        data-collapsed={collapsed ? "true" : "false"}
         role="tablist"
         aria-orientation="vertical"
         aria-label="主导航"
         onKeyDown={onKeyDown}
-        className={cn(
-          "app-nav cds-scroll-fade min-h-0 flex-1 overflow-y-auto pb-3",
-          collapsed ? "px-2.5 pt-1" : "px-2.5 pt-2",
-        )}
+        className="app-nav app-scroll cds-scroll-fade relative min-h-0 flex-1 overflow-y-auto pb-3 pt-1.5"
       >
+        <span
+          aria-hidden
+          className="nav-glider"
+          style={{
+            transform: `translateY(${pillTop ?? 0}px)`,
+            opacity: pillTop == null ? 0 : 1,
+            ...(pillReady ? {} : { transition: "none" }),
+          }}
+        />
+
         {groups.map((group, gi) => (
-          <div key={group.id} className={gi === 0 ? undefined : collapsed ? "mt-1" : "mt-4"}>
+          <div key={group.id} className={gi === 0 ? undefined : collapsed ? "mt-1" : "mt-3"}>
             {collapsed ? (
-              gi > 0 && <div className="mx-auto mb-2 h-px w-5 bg-sidebar-border" aria-hidden />
+              gi > 0 && <div className="mx-auto mb-1.5 h-px w-5 bg-border/70" aria-hidden />
             ) : (
-              <div className="px-2.5 pb-1.5 text-[11px] font-medium tracking-[0.08em] text-muted-foreground">
+              <div className="px-2 pb-1 pt-1 text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground">
                 {group.label}
               </div>
             )}
@@ -252,40 +301,49 @@ export function Sidebar({
                     type="button"
                     aria-selected={selected}
                     tabIndex={selected ? 0 : -1}
-                    title={collapsed ? item.label : undefined}
+                    title={
+                      collapsed
+                        ? item.alert && item.alertHint
+                          ? `${item.label} · ${item.alertHint}`
+                          : item.label
+                        : undefined
+                    }
                     aria-label={collapsed ? item.label : undefined}
                     onClick={() => onSelect(item.value)}
                     className={cn(
-                      "group/item relative flex items-center rounded-lg text-left text-[13px] transition-[background-color,color,box-shadow] duration-150",
-                      collapsed ? "size-8 justify-center" : "h-8 w-full gap-2.5 px-2.5",
+                      "group/item relative z-10 flex items-center overflow-hidden rounded-lg text-left text-[12.5px]",
+                      "transition-[background-color,color,height,transform] duration-150 active:scale-[0.985]",
+                      collapsed
+                        ? "h-[var(--nav-item-h)] w-[var(--nav-item-h)] gap-2 px-2"
+                        : "h-[var(--nav-item-h)] w-full gap-2 px-2",
                       selected
-                        ? "nav-settle bg-surface-2 font-medium text-foreground shadow-sm ring-1 ring-black/[0.04] dark:bg-[var(--cds-gray-800)] dark:ring-white/[0.08]"
-                        : "text-muted-foreground hover:bg-[var(--cds-alpha-1)] hover:text-foreground",
+                        ? "font-medium text-foreground"
+                        : "text-muted-foreground hover:bg-[var(--cds-nav-pill-hover)] hover:text-foreground",
                     )}
                   >
                     <item.icon
                       size={16}
                       strokeWidth={1.75}
                       className={cn(
-                        "shrink-0 transition-colors",
-                        selected ? "text-clay" : "text-muted-foreground/85",
+                        "shrink-0 transition-[color,transform] duration-200",
+                        selected
+                          ? "scale-[1.04] text-clay"
+                          : "text-muted-foreground/80 group-hover/item:text-foreground",
                       )}
                     />
-                    {!collapsed && <span className="min-w-0 flex-1 truncate">{item.label}</span>}
-                    {!collapsed && !!item.badge && item.badge > 0 && (
+                    <span className="nav-label min-w-0 flex-1 truncate">{item.label}</span>
+                    {item.alert && !collapsed && (
                       <span
-                        title={item.badgeHint ? `${item.badge} ${item.badgeHint}` : undefined}
-                        aria-label={
-                          item.badgeHint ? `${item.badge} ${item.badgeHint}` : undefined
-                        }
-                        className="ml-1 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-danger/12 px-1 text-[10px] font-semibold tabular-nums text-danger"
+                        title={item.alertHint}
+                        aria-label={item.alertHint}
+                        className="ml-1 flex size-4 shrink-0 items-center justify-center"
                       >
-                        {item.badge > 99 ? "99+" : item.badge}
+                        <span className="size-1.5 rounded-full bg-danger/80" aria-hidden />
                       </span>
                     )}
-                    {collapsed && !!item.badge && item.badge > 0 && (
+                    {item.alert && collapsed && (
                       <span
-                        className="absolute right-1 top-1 size-1.5 rounded-full bg-danger ring-2 ring-sidebar"
+                        className="absolute right-1 top-1 size-1.5 rounded-full bg-danger ring-2 ring-background"
                         aria-hidden
                       />
                     )}
@@ -297,40 +355,42 @@ export function Sidebar({
         ))}
       </nav>
 
-      {/* 运行状态：数据源可用性 + 刷新节奏 + 最近取数时间 */}
-      <div className={cn("shrink-0", collapsed ? "flex justify-center px-2 pb-3" : "px-2.5 pb-3")}>
+      {/* 运行状态：压缩成两行，不再用卡片包住；整块悬停可看完整状态 */}
+      <div className={cn("shrink-0", collapsed ? "flex justify-center px-3 pb-3" : "px-2 pb-2")}>
         {collapsed ? (
           <div
             title={statusTitle}
-            className="flex size-8 items-center justify-center rounded-lg"
+            className="flex size-8 items-center justify-center rounded-lg transition-colors hover:bg-[var(--cds-alpha-1)]"
             aria-hidden
           >
             <span className={cn("size-2 rounded-full", dotTone)} />
           </div>
         ) : (
-          // 展开态三行信息已经全部可见，不再挂 title，避免重复弹卡
-          <div className="rounded-lg bg-[var(--cds-alpha-1)] px-2.5 py-2">
-            <div className="flex items-center gap-1.5">
-              <span className={cn("size-1.5 shrink-0 rounded-full", dotTone)} aria-hidden />
-              <span className="truncate text-[11px] font-medium text-foreground">
-                {status.scopeLabel}
-              </span>
-              <span className="ml-auto shrink-0 font-mono text-[9.5px] text-muted-foreground/70">
-                v{version}
-              </span>
-            </div>
+          <>
+            <div className="footer-hairline mb-1 h-px" aria-hidden />
             <div
-              className={cn(
-                "mt-1 truncate text-[10.5px]",
-                missing.length > 0 ? "text-warn" : "text-muted-foreground",
-              )}
+              title={statusTitle}
+              className="rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--cds-alpha-1)]"
             >
-              {sourceLine}
+              <div className="flex items-center gap-1.5">
+                <span className={cn("size-1.5 shrink-0 rounded-full", dotTone)} aria-hidden />
+                <span className="truncate text-[11px] font-medium text-foreground">
+                  {status.scopeLabel}
+                </span>
+                <span className="ml-auto shrink-0 font-mono text-[9.5px] text-muted-foreground/70">
+                  v{version}
+                </span>
+              </div>
+              <div
+                className={cn(
+                  "mt-0.5 truncate text-[10.5px]",
+                  missing.length > 0 ? "text-warn" : "text-muted-foreground",
+                )}
+              >
+                {sourceLine}
+              </div>
             </div>
-            <div className="mt-0.5 truncate font-mono text-[10.5px] tabular-nums text-muted-foreground/80">
-              {clockLine}
-            </div>
-          </div>
+          </>
         )}
       </div>
     </aside>

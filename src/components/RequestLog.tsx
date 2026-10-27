@@ -473,7 +473,8 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
       {/* -mx-1 让首列的 8px 单元格内边距从 20px 回到 16px，与面板标题同一条左缘。
           宽度重算有一帧滞后：收窄窗口时旧列宽会短暂溢出，若这里常开 overflow-x-auto
           就会闪一下横向滚动条；只有列宽地板（表格确实放不下）时才允许滚动。 */}
-      <div className={cn("-mx-1", tableMinW ? "overflow-x-auto" : "overflow-hidden")}>
+      {/* overflow-clip 只裁切、不生成滚动容器，表头才能相对 main 粘住 */}
+      <div className={cn("-mx-1", tableMinW ? "overflow-x-auto" : "overflow-clip")}>
         <table
           ref={tableRef}
           className={cn(
@@ -494,7 +495,7 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
               ))}
             </colgroup>
           )}
-          <thead className="sticky top-0 z-10 bg-card">
+          <thead className="sticky top-0 z-10 bg-card [&>tr>th]:bg-card">
             <tr>
               <th className={cn(TH, "text-left")}>对话</th>
               <th className={cn(TH, "text-left")}>时间</th>

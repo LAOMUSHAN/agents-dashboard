@@ -33,7 +33,8 @@
   --chart-3: var(--cds-orange-200);
   --chart-4: var(--cds-gray-600);
   --chart-5: var(--cds-orange-400);
-  --sidebar: var(--cds-surface-0);
+  /* 统一外壳：侧栏与内容列共用同一底色，结构只靠发丝线与留白 */
+  --sidebar: var(--background);
   --sidebar-foreground: var(--cds-text-primary);
   --sidebar-primary: var(--brand);
   --sidebar-primary-foreground: #ffffff;

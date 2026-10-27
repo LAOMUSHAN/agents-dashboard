@@ -134,6 +134,13 @@
   --cds-segmented-track: rgba(0, 0, 0, 0.06);
   --cds-segmented-thumb: #ffffff;
 
+  /* 导航滑块：统一外壳上唯一抬升的表面，比卡片弱一档 */
+  --cds-nav-pill: hsla(0, 0%, 8%, 0.06);
+  --cds-nav-pill-hover: hsla(0, 0%, 8%, 0.035);
+  --cds-nav-pill-shadow:
+    inset 0 0 0 1px hsla(0, 0%, 8%, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+
   /* 7. 文本 */
   --cds-text-primary: #151515;
   --cds-text-secondary: #525252;
@@ -238,6 +245,13 @@
   --cds-fill-success: #4ade80;
   --cds-segmented-track: rgba(255, 255, 255, 0.08);
   --cds-segmented-thumb: #2c2c2a;
+
+  /* 导航滑块：深色下靠 7% 白与内高光抬起，不叠重阴影 */
+  --cds-nav-pill: hsla(0, 0%, 100%, 0.07);
+  --cds-nav-pill-hover: hsla(0, 0%, 100%, 0.04);
+  --cds-nav-pill-shadow:
+    inset 0 0 0 1px hsla(0, 0%, 100%, 0.05),
+    0 1px 2px rgba(0, 0, 0, 0.25);
 
   --cds-text-primary: #f5f5f5;
   --cds-text-secondary: #a3a3a3;

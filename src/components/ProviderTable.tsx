@@ -192,7 +192,7 @@ export function ProviderTable({
 
       <div className="rounded-lg">
         <table className="w-full table-fixed border-separate border-spacing-0">
-          <thead className="sticky top-0 z-10 bg-card">
+          <thead className="sticky top-0 z-10 bg-card [&>tr>th]:bg-card">
             <tr>
               <th className={cn(TH, "w-[26%] text-left")}>{HEAD_LABEL[dim]}</th>
               <th className={cn(TH_NUM, "w-[10%]")}>请求</th>

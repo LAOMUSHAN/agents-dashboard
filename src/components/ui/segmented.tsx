@@ -58,8 +58,9 @@ export function Segmented<T extends string>({
           width: thumb.width,
           boxShadow:
             "inset 0 0 0 0.5px var(--cds-border), 0 1px 2px #0000000f, 0 2px 6px -1px #0000000d",
+          // CDS 分段控件：滑块位移走 15 阶弹簧，宽度同步跟随，中文标签不等长也不抖
           transition:
-            "left var(--cds-dur-snap) var(--cds-ease-overshoot), width var(--cds-dur-snap) var(--cds-ease-overshoot)",
+            "left 240ms var(--cds-spring-press), width 240ms var(--cds-spring-press)",
         }}
       />
       {options.map((o) => {

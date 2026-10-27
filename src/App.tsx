@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type UIEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { HeatCell, SourceFilter } from "../shared/types";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -130,6 +130,9 @@ export default function App() {
   // ui-prefs.json 是整文件写入：保存前先合并已有字段，避免两个设置互相覆盖
   const prefsRef = useRef<Record<string, unknown>>({});
   const queryClient = useQueryClient();
+  // 内容列滚动容器：切页复位与顶栏发丝线都读它，不再依赖 window.scrollTo
+  const mainRef = useRef<HTMLElement>(null);
+  const [scrolled, setScrolled] = useState(false);
 
   // 请求的完整身份。控件用实时值；视图只用快照里的 request。
   const request = useMemo<DashboardRequest>(
@@ -202,7 +205,15 @@ export default function App() {
   const switchTab = (t: Tab) => {
     setTab(t);
     localStorage.setItem(TAB_KEY, t);
-    window.scrollTo({ top: 0 });
+    // 滚动发生在 main 上，window.scrollTo 不会生效；先复位再挂载新页
+    mainRef.current?.scrollTo({ top: 0 });
+    setScrolled(false);
+  };
+
+  // 只在「是否离开顶部」翻转时更新状态，滚动过程中不触发重渲染
+  const onMainScroll = (event: UIEvent<HTMLElement>) => {
+    const next = event.currentTarget.scrollTop > 2;
+    setScrolled((prev) => (prev === next ? prev : next));
   };
 
   const toggleNav = () => {
@@ -311,9 +322,9 @@ export default function App() {
       value: item.value,
       label: item.label,
       icon: item.icon,
-      // 只有健康页有值得常驻的计数：区间内的错误请求数
-      badge: item.value === "health" ? (errors?.error ?? 0) : 0,
-      badgeHint: item.value === "health" ? "个错误请求" : undefined,
+      // 导航只表达「有错误信号」；具体数量留在健康页，避免行尾挂一个会被误读的累计数
+      alert: item.value === "health" ? (errors?.error ?? 0) > 0 : false,
+      alertHint: item.value === "health" ? "区间内有错误请求，打开查看明细" : undefined,
     })),
   }));
 
@@ -344,9 +355,14 @@ export default function App() {
         }}
       />
 
-      {/* 顶栏属于内容列：与侧栏顶行同高、共用竖分隔线，窗口左侧只有侧栏一个身份区 */}
+      {/* 顶栏属于内容列：与侧栏顶行同为 44px、共用同一块底色，窗口左侧只有侧栏一个身份区 */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <TitleBar title={currentTab.label} hint={TAB_HINTS[tab]} busy={busy}>
+        <TitleBar
+          title={currentTab.label}
+          hint={TAB_HINTS[tab]}
+          busy={busy}
+          scrolled={scrolled}
+        >
           {tab !== "settings" && (
             <SourceScope value={source} onChange={setSourceScope} sources={sources} />
           )}
@@ -367,8 +383,12 @@ export default function App() {
           />
         </TitleBar>
 
-        <main className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-5 pb-16 pt-5">
+        <main
+          ref={mainRef}
+          onScroll={onMainScroll}
+          className="app-scroll min-h-0 flex-1 overflow-y-auto"
+        >
+          <div className="mx-auto flex max-w-[1680px] flex-col gap-4 px-5 pb-16 pt-4">
             {loadError && (
               <div
                 role="alert"
@@ -392,121 +412,125 @@ export default function App() {
                   </span>
                 </div>
               ))}
-            {tab === "overview" && (
-              <>
-                {overviewLayout.visible.map((id) => {
-                  let node: ReactNode = null;
-                  switch (id) {
-                    case "insight":
-                      node = (
-                        <InsightCard
-                          summary={summary}
-                          models={models}
-                          providers={providers}
-                          sourceTotals={sourceTotals}
-                        />
-                      );
-                      break;
-                    case "summary":
-                      node = (
-                        <SummaryCards
-                          summary={summary}
-                          trend={trend}
-                          capabilities={capabilities}
-                          source={committedSource}
-                        />
-                      );
-                      break;
-                    case "trend":
-                      node = <TrendChart points={trend} monthly={monthlyTrend} />;
-                      break;
-                    case "modelTrend":
-                      node = <ModelTrendChart points={modelTrend} />;
-                      break;
-                    case "providerTrend":
-                      node = <ProviderTrendChart points={providerTrend} names={providerNames} />;
-                      break;
-                    case "context":
-                      node = <ContextComposition summary={summary} tools={tools} />;
-                      break;
-                    case "activity": {
-                      // 视图的形状/标签只从快照的 request 推导；key 变才重挂载，
-                      // 因此入场动画一定发生在数据到齐之后，后台刷新不会重播。
-                      const activityRequest = snapshot?.request ?? request;
-                      const activitySnapshot: Committed<ViewRequest, HeatCell[]> = {
-                        request: activityRequest,
-                        data: activity,
-                      };
-                      node = (
-                        <ActivityHeatmap
-                          key={dashboardViewKey(activityRequest)}
-                          snapshot={activitySnapshot}
-                          pending={dashboard.isPlaceholderData && dashboard.isFetching}
-                        />
-                      );
-                      break;
+
+            {/* 切页只重挂载这一层：入场淡入上浮，后台刷新与范围变化不会重播 */}
+            <div key={tab} className="tab-enter flex flex-col gap-4">
+              {tab === "overview" && (
+                <>
+                  {overviewLayout.visible.map((id) => {
+                    let node: ReactNode = null;
+                    switch (id) {
+                      case "insight":
+                        node = (
+                          <InsightCard
+                            summary={summary}
+                            models={models}
+                            providers={providers}
+                            sourceTotals={sourceTotals}
+                          />
+                        );
+                        break;
+                      case "summary":
+                        node = (
+                          <SummaryCards
+                            summary={summary}
+                            trend={trend}
+                            capabilities={capabilities}
+                            source={committedSource}
+                          />
+                        );
+                        break;
+                      case "trend":
+                        node = <TrendChart points={trend} monthly={monthlyTrend} />;
+                        break;
+                      case "modelTrend":
+                        node = <ModelTrendChart points={modelTrend} />;
+                        break;
+                      case "providerTrend":
+                        node = <ProviderTrendChart points={providerTrend} names={providerNames} />;
+                        break;
+                      case "context":
+                        node = <ContextComposition summary={summary} tools={tools} />;
+                        break;
+                      case "activity": {
+                        // 视图的形状/标签只从快照的 request 推导；key 变才重挂载，
+                        // 因此入场动画一定发生在数据到齐之后，后台刷新不会重播。
+                        const activityRequest = snapshot?.request ?? request;
+                        const activitySnapshot: Committed<ViewRequest, HeatCell[]> = {
+                          request: activityRequest,
+                          data: activity,
+                        };
+                        node = (
+                          <ActivityHeatmap
+                            key={dashboardViewKey(activityRequest)}
+                            snapshot={activitySnapshot}
+                            pending={dashboard.isPlaceholderData && dashboard.isFetching}
+                          />
+                        );
+                        break;
+                      }
+                      case "agents":
+                        node = <AgentStatsPanel stats={agents} />;
+                        break;
+                      case "waste":
+                        node = <WasteRankPanel projects={projects} models={models} providers={providers} />;
+                        break;
                     }
-                    case "agents":
-                      node = <AgentStatsPanel stats={agents} />;
-                      break;
-                    case "waste":
-                      node = <WasteRankPanel projects={projects} models={models} providers={providers} />;
-                      break;
-                  }
-                  return (
-                    <div key={id} className="contents">
-                      {node}
+                    return (
+                      <div key={id} className="contents">
+                        {node}
+                      </div>
+                    );
+                  })}
+                  {overviewLayout.visible.length === 0 && (
+                    <div className="rounded-panel border border-dashed border-border bg-card/40 px-6 py-10 text-center">
+                      <p className="text-[13px] font-medium text-foreground">总览模块已全部隐藏</p>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        在「设置 → 总览模块」里把需要的模块拖回展示区。
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => switchTab("settings")}
+                        className="mt-3 inline-flex h-7 items-center gap-1.5 rounded-full border border-border/70 bg-accent/40 px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
+                      >
+                        <Settings size={12} />
+                        去设置
+                      </button>
                     </div>
-                  );
-                })}
-                {overviewLayout.visible.length === 0 && (
-                  <div className="rounded-panel border border-dashed border-border bg-card/40 px-6 py-10 text-center">
-                    <p className="text-[13px] font-medium text-foreground">总览模块已全部隐藏</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      在「设置 → 总览模块」里把需要的模块拖回展示区。
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => switchTab("settings")}
-                      className="mt-3 inline-flex h-7 items-center gap-1.5 rounded-full border border-border/70 bg-accent/40 px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-accent"
-                    >
-                      <Settings size={12} />
-                      去设置
-                    </button>
+                  )}
+                </>
+              )}
+
+              {tab === "breakdown" && <ProviderTable stats={providers} models={models} projects={projects} />}
+
+              {tab === "health" && (
+                <>
+                  <div className="grid-2">
+                    <ErrorPanel stats={errors} />
+                    <LatencyPanel stats={latency} />
                   </div>
-                )}
-              </>
-            )}
+                  <ToolStatsPanel
+                    stats={tools}
+                    partialCancelled={capabilities.includes("toolCancelled")}
+                  />
+                </>
+              )}
 
-            {tab === "breakdown" && <ProviderTable stats={providers} models={models} projects={projects} />}
+              {tab === "log" && <RequestLog range={range} source={source} />}
 
-            {tab === "health" && (
-              <>
-                <div className="grid-2">
-                  <ErrorPanel stats={errors} />
-                  <LatencyPanel stats={latency} />
-                </div>
-                <ToolStatsPanel
-                  stats={tools}
-                  partialCancelled={capabilities.includes("toolCancelled")}
-                />
-              </>
-            )}
-
-            {tab === "log" && <RequestLog range={range} source={source} />}
-
-            {tab === "settings" && (
-              <>
-                <OverviewModulesPanel layout={overviewLayout} onChange={updateOverviewLayout} />
-                <PricingPanel
-                  range={committedRange}
-                  models={models}
-                  onSaved={() => {
-                    void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
-                  }}
-                />
-              </>
-            )}
+              {tab === "settings" && (
+                <>
+                  <OverviewModulesPanel layout={overviewLayout} onChange={updateOverviewLayout} />
+                  <PricingPanel
+                    range={committedRange}
+                    models={models}
+                    onSaved={() => {
+                      void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
+                    }}
+                  />
+                </>
+              )}
+            </div>
           </div>
         </main>
       </div>

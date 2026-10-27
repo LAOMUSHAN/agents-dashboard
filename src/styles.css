@@ -991,23 +991,183 @@ th.num {
 }
 
 
-/* 侧栏选中态落位：沿用 CDS 15 阶弹簧，切换标签时抬升的选中块轻微回弹 */
-@keyframes nav-settle {
-  0% { transform: scale(0.985); }
-  55% { transform: scale(1.004); }
-  100% { transform: scale(1); }
+/* ==========================================================================
+   统一外壳：侧栏、顶栏与内容列共用同一底色
+   结构只由发丝线与留白给出；下面是外壳层的少量手工样式。
+   ========================================================================== */
+
+/* 侧栏竖线：上下两端用同一段 24px 渐隐，线从顶栏下沿淡入、到窗口底部淡出 */
+.sidebar-divider {
+  background: linear-gradient(
+    to bottom,
+    transparent 0,
+    var(--cds-border) 24px,
+    var(--cds-border) calc(100% - 24px),
+    transparent 100%
+  );
 }
-.nav-settle {
-  animation: nav-settle 260ms var(--cds-spring-press);
+
+/* 横向发丝线：顶栏底线与侧栏底部线共用同一组停靠点（两端各 24px 渐隐） */
+.header-hairline,
+.footer-hairline {
+  background: linear-gradient(
+    to right,
+    transparent 0,
+    var(--cds-border) 24px,
+    var(--cds-border) calc(100% - 24px),
+    transparent 100%
+  );
+}
+
+/* 顶栏底线：默认隐形，内容离开顶部后才浮出；两端淡出，不切齐窗口边 */
+.header-hairline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--cds-dur-base) var(--cds-ease-out-expo);
+}
+header[data-scrolled="true"] .header-hairline {
+  opacity: 1;
+}
+
+/* 忙碌扫描线：1px 陶土光带从左向右扫过，替代原来的整条脉冲块 */
+.header-busy {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.header-busy::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 28%;
+  opacity: 0.75;
+  background: linear-gradient(90deg, transparent, var(--cds-clay), transparent);
+  animation: busy-sweep 1.15s linear infinite;
   will-change: transform;
 }
-
-/* 侧栏滚动渐隐：只做底部淡出，避免首项被遮 */
-.app-nav {
-  --cds-scroll-fade-top: 0px;
-  --cds-scroll-fade-bottom: 12px;
+@keyframes busy-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(460%); }
 }
 
-section { scroll-margin-top: 56px; }
+/* 导航共享滑块：宽度/高度跟随 CSS 变量，纵坐标由组件实测后写入 transform */
+.app-nav {
+  --nav-pad: 8px;
+  --nav-item-h: 30px;
+  padding-left: var(--nav-pad);
+  padding-right: var(--nav-pad);
+  --cds-scroll-fade-top: 0px;
+  --cds-scroll-fade-bottom: 10px;
+}
+.app-nav[data-collapsed="true"] {
+  --nav-pad: 12px;
+  --nav-item-h: 32px;
+}
+.nav-glider {
+  position: absolute;
+  /* top: 0 让绝对定位以 nav 的 padding box 为原点；缺省 auto 会落在内容盒，
+     正好差一个 padding-top，滑块就会比条目低 6px。 */
+  top: 0;
+  left: var(--nav-pad);
+  right: var(--nav-pad);
+  height: var(--nav-item-h);
+  border-radius: 8px;
+  background: var(--cds-nav-pill);
+  box-shadow: var(--cds-nav-pill-shadow);
+  pointer-events: none;
+  will-change: transform;
+  transition:
+    transform 320ms var(--cds-spring-press),
+    height 150ms var(--cds-ease-out-expo),
+    left var(--cds-dur-base) var(--cds-ease-out-expo),
+    right var(--cds-dur-base) var(--cds-ease-out-expo),
+    opacity var(--cds-dur-fast) var(--cds-ease-out-expo);
+}
+
+/* 收起时标签淡出并向左收 3px；宽度由按钮宽度自然压到 0，不拆 DOM */
+.nav-label {
+  transition:
+    opacity 140ms var(--cds-ease-out-expo),
+    transform 140ms var(--cds-ease-out-expo);
+}
+[data-collapsed="true"] .nav-label {
+  opacity: 0;
+  transform: translateX(-3px);
+}
+
+/* 切页入场：只动内容层，侧栏滑块与顶栏标题各自独立运动 */
+@keyframes tab-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.tab-enter {
+  /* 不填 both：动画结束后回到基样式，避免残留 identity transform 影响 sticky */
+  animation: tab-enter var(--cds-dur-base) var(--cds-ease-out-expo);
+}
+
+/* 顶栏标题切换：新旧标题不做共享元素，只做 3px 上浮淡入 */
+@keyframes title-swap {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.title-swap {
+  animation: title-swap 200ms var(--cds-ease-out-expo);
+}
+
+/* 细滚动条：内容列与侧栏共用；轨道透明，拇指留 3px 内缩 */
+.app-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--cds-alpha-3) transparent;
+}
+.app-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.app-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-scroll::-webkit-scrollbar-thumb {
+  background: var(--cds-alpha-2);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+.app-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--cds-alpha-3);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .header-busy::after {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.3;
+  }
+}
 
 
