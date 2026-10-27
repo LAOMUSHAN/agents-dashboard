@@ -1171,3 +1171,15 @@ header[data-scrolled="true"] .header-hairline {
 }
 
 
+
+/* 顶栏速度徽标的描边倒计时：走合成线程，不受主线程卡顿和 rAF 节流影响。
+   周长由 --rate-ring-p 传入；刷新时靠 React key 重挂载来重启动画。 */
+@keyframes rate-ring-fill {
+  from { stroke-dasharray: 0 var(--rate-ring-p); }
+  to { stroke-dasharray: var(--rate-ring-p) var(--rate-ring-p); }
+}
+
+@keyframes rate-bar-fill {
+  from { width: 0%; }
+  to { width: 100%; }
+}

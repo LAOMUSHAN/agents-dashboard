@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { TokenRate } from "../../shared/types";
 import { fmtNumber, fmtTimestamp } from "../format";
 import { Hint, HintText } from "./ui/hint";
@@ -16,11 +17,12 @@ import { cn } from "@/lib/utils";
  * 5000 输出 ÷ 120 会把 500 摊成 41（虚低）。
  *
  * 描边是一圈**正向**倒计时进度：起点在上边中点、顺时针增长、刷新归零。
- * 进度由 requestAnimationFrame 直接写 SVG 属性，不经过 React 渲染——早先用
- * 200ms 的 setInterval 改 state，每跳都会重渲染整个悬停卡内容，主线程一忙回调就
- * 迟到，视觉上就是「停住—猛跳」。文字倒计时仍走 state，但只在整 0.1 秒变化时更新。
+ * 进度由 **CSS 动画**驱动（`rate-ring-fill`），走合成线程：早先试过 200ms 的
+ * setInterval 改 state（每次跳都重渲染整个悬停卡）和 requestAnimationFrame 直写
+ * 属性（窗口被遮挡时 rAF 被 WebView2 节流到 1fps 甚至暂停），两者都会让进度
+ * 「停住—猛跳」。CSS 动画不受主线程与 rAF 节流影响，刷新时靠 key 重挂载重启动画。
  *
- * 展示只留数字 + 单位：没有状态点，宽度按「4 位整数 + 1 位小数」自然撑开。
+ * 文字倒计时用 ref 直写 textContent，同样不触发 React 渲染。
  */
 export function TokenRateBadge({
   rate,
@@ -43,8 +45,7 @@ export function TokenRateBadge({
   const intervalMs = Math.max(1, windowSec) * 1000;
 
   const trackRef = useRef<HTMLDivElement>(null);
-  const ringRef = useRef<SVGRectElement>(null);
-  const barRef = useRef<HTMLDivElement>(null);
+  const countdownRef = useRef<HTMLSpanElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [countdown, setCountdown] = useState("—");
 
@@ -73,39 +74,25 @@ export function TokenRateBadge({
       ? 2 * straightTop + 2 * (size.h - stroke - 2 * r) + 2 * Math.PI * r
       : 0;
 
-  // 进度：rAF 直写 DOM，零 React 重渲染；文字每秒级更新一次
+  // 倒计时文字：ref 直写，200ms 一跳也不触发渲染
   useEffect(() => {
-    if (!updatedAt || perimeter <= 0) {
+    if (!updatedAt) {
       setCountdown("—");
+      if (countdownRef.current) countdownRef.current.textContent = "—";
       return;
     }
-    let raf = 0;
-    let lastText = "";
     const tick = () => {
-      const elapsed = Math.max(0, Date.now() - updatedAt);
-      const p = Math.min(1, elapsed / intervalMs);
-      const ring = ringRef.current;
-      if (ring) {
-        ring.setAttribute("stroke-dasharray", `${perimeter * p} ${perimeter}`);
-        // 走满 = 已到刷新点、正在等新数据，描边提亮一档表示「刷新中」
-        ring.setAttribute("stroke-opacity", p >= 1 ? "0.85" : "0.55");
-      }
-      const bar = barRef.current;
-      if (bar) {
-        bar.style.width = `${p * 100}%`;
-        bar.style.opacity = p >= 1 ? "0.85" : "0.55";
-      }
-      const remaining = intervalMs - elapsed;
+      const remaining = intervalMs - (Date.now() - updatedAt);
       const text = remaining > 0 ? `${(remaining / 1000).toFixed(1)}s` : "刷新中…";
-      if (text !== lastText) {
-        lastText = text;
-        setCountdown(text);
+      if (countdownRef.current && countdownRef.current.textContent !== text) {
+        countdownRef.current.textContent = text;
       }
-      raf = requestAnimationFrame(tick);
+      setCountdown((prev) => (prev === text ? prev : text));
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [updatedAt, intervalMs, perimeter]);
+    tick();
+    const id = window.setInterval(tick, 200);
+    return () => window.clearInterval(id);
+  }, [updatedAt, intervalMs]);
 
   return (
     <Hint
@@ -140,17 +127,26 @@ export function TokenRateBadge({
                   value={`${rate.requests} 个请求 · ${rate.sessions} 个会话`}
                 />
                 <RateRow label="采样" value={fmtTimestamp(rate.sampledAt)} />
-                <RateRow label="下次刷新" value={countdown} />
+                <RateRow
+                  label="下次刷新"
+                  value={countdown}
+                  valueRef={countdownRef}
+                />
               </div>
               <div
                 aria-hidden
                 className="mt-1 h-[2px] w-full overflow-hidden rounded-full bg-border/50"
               >
-                <div
-                  ref={barRef}
-                  className="h-full rounded-full bg-[var(--cds-clay)]"
-                  style={{ width: "0%", opacity: 0.55 }}
-                />
+                {updatedAt ? (
+                  <div
+                    key={updatedAt}
+                    className="h-full rounded-full bg-[var(--cds-clay)]/70"
+                    style={{
+                      width: "0%",
+                      animation: `rate-bar-fill ${windowSec}s linear forwards`,
+                    }}
+                  />
+                ) : null}
               </div>
               <p className="mt-2 border-t border-border/60 pt-2 text-[10.5px] leading-relaxed text-muted-foreground">
                 总速度 = 输出 ÷ 忙碌墙钟，与总览「总速度」同口径；解码速度 = 输出 ÷
@@ -195,7 +191,8 @@ export function TokenRateBadge({
               strokeWidth={stroke}
             />
             <rect
-              ref={ringRef}
+              // 刷新一次就换 key，让 CSS 动画从头播放
+              key={`${updatedAt}-${Math.round(perimeter)}`}
               x={stroke / 2}
               y={stroke / 2}
               width={size.w - stroke}
@@ -207,6 +204,12 @@ export function TokenRateBadge({
               strokeWidth={stroke}
               strokeDasharray={`0 ${perimeter}`}
               strokeDashoffset={-topMid}
+              style={
+                {
+                  "--rate-ring-p": perimeter,
+                  animation: `rate-ring-fill ${windowSec}s linear forwards`,
+                } as CSSProperties
+              }
             />
           </svg>
         )}
@@ -227,11 +230,22 @@ export function TokenRateBadge({
 /** 速率：纯数字 + 1 位小数（4 位整数 + 小数点 + 1 位，正好 5 个数字位；不带千分位逗号） */
 const fmtSpeed = (n: number) => n.toFixed(1);
 
-function RateRow({ label, value }: { label: string; value: string }) {
+function RateRow({
+  label,
+  value,
+  valueRef,
+}: {
+  label: string;
+  value: string;
+  valueRef?: React.RefObject<HTMLSpanElement>;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-[11px]">
       <span className="text-muted-foreground">{label}</span>
-      <span className="tabular-nums text-popover-foreground">{value}</span>
+      <span ref={valueRef} className="tabular-nums text-popover-foreground">
+        {value}
+      </span>
     </div>
   );
 }
+
