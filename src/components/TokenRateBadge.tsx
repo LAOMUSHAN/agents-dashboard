@@ -15,8 +15,12 @@ import { cn } from "@/lib/utils";
  * 读数拉到万级。分母刻意不用整个刷新窗口：5 个对话各跑 10 秒、窗口 120 秒，
  * 5000 输出 ÷ 120 会把 500 摊成 41（虚低）。
  *
- * 胶囊描边是一圈很淡的倒计时进度（剩余时间 = 满格，刷新时归零），悬停卡里也
- * 有一条同样的进度。展示只留数字 + 单位，宽度按「4 位整数 + 1 位小数」自然撑开。
+ * 描边是一圈**正向**倒计时进度：起点在上边中点、顺时针增长、刷新归零。
+ * 进度由 requestAnimationFrame 直接写 SVG 属性，不经过 React 渲染——早先用
+ * 200ms 的 setInterval 改 state，每跳都会重渲染整个悬停卡内容，主线程一忙回调就
+ * 迟到，视觉上就是「停住—猛跳」。文字倒计时仍走 state，但只在整 0.1 秒变化时更新。
+ *
+ * 展示只留数字 + 单位：没有状态点，宽度按「4 位整数 + 1 位小数」自然撑开。
  */
 export function TokenRateBadge({
   rate,
@@ -39,8 +43,10 @@ export function TokenRateBadge({
   const intervalMs = Math.max(1, windowSec) * 1000;
 
   const trackRef = useRef<HTMLDivElement>(null);
+  const ringRef = useRef<SVGRectElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
-  const [now, setNow] = useState(() => Date.now());
+  const [countdown, setCountdown] = useState("—");
 
   // 胶囊宽度随数字变化：量一次，之后跟 ResizeObserver
   useEffect(() => {
@@ -56,19 +62,6 @@ export function TokenRateBadge({
     return () => ro.disconnect();
   }, []);
 
-  // 倒计时：200ms 一跳，配合 CSS 线性过渡看起来是连续的
-  useEffect(() => {
-    if (!updatedAt) return;
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 200);
-    return () => window.clearInterval(id);
-  }, [updatedAt]);
-
-  const elapsed = updatedAt ? Math.max(0, now - updatedAt) : 0;
-  const progress = updatedAt ? Math.min(1, elapsed / intervalMs) : 0;
-  const remaining = updatedAt ? Math.max(0, intervalMs - elapsed) : 0;
-  const countdown = updatedAt ? `${(remaining / 1000).toFixed(1)}s` : "—";
-
   // 圆角矩形周长：两段直边 + 两个半圆。路径起点在顶边左端（左上圆角结束处），
   // 把 dash 模式向前推「半个顶边」就能让进度从顶部中点开始顺时针生长。
   const stroke = 1;
@@ -79,6 +72,40 @@ export function TokenRateBadge({
     size.w > 0
       ? 2 * straightTop + 2 * (size.h - stroke - 2 * r) + 2 * Math.PI * r
       : 0;
+
+  // 进度：rAF 直写 DOM，零 React 重渲染；文字每秒级更新一次
+  useEffect(() => {
+    if (!updatedAt || perimeter <= 0) {
+      setCountdown("—");
+      return;
+    }
+    let raf = 0;
+    let lastText = "";
+    const tick = () => {
+      const elapsed = Math.max(0, Date.now() - updatedAt);
+      const p = Math.min(1, elapsed / intervalMs);
+      const ring = ringRef.current;
+      if (ring) {
+        ring.setAttribute("stroke-dasharray", `${perimeter * p} ${perimeter}`);
+        // 走满 = 已到刷新点、正在等新数据，描边提亮一档表示「刷新中」
+        ring.setAttribute("stroke-opacity", p >= 1 ? "0.85" : "0.55");
+      }
+      const bar = barRef.current;
+      if (bar) {
+        bar.style.width = `${p * 100}%`;
+        bar.style.opacity = p >= 1 ? "0.85" : "0.55";
+      }
+      const remaining = intervalMs - elapsed;
+      const text = remaining > 0 ? `${(remaining / 1000).toFixed(1)}s` : "刷新中…";
+      if (text !== lastText) {
+        lastText = text;
+        setCountdown(text);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [updatedAt, intervalMs, perimeter]);
 
   return (
     <Hint
@@ -120,8 +147,9 @@ export function TokenRateBadge({
                 className="mt-1 h-[2px] w-full overflow-hidden rounded-full bg-border/50"
               >
                 <div
-                  className="h-full rounded-full bg-[var(--cds-clay)]/55 transition-[width] duration-200 ease-linear"
-                  style={{ width: `${progress * 100}%` }}
+                  ref={barRef}
+                  className="h-full rounded-full bg-[var(--cds-clay)]"
+                  style={{ width: "0%", opacity: 0.55 }}
                 />
               </div>
               <p className="mt-2 border-t border-border/60 pt-2 text-[10.5px] leading-relaxed text-muted-foreground">
@@ -167,6 +195,7 @@ export function TokenRateBadge({
               strokeWidth={stroke}
             />
             <rect
+              ref={ringRef}
               x={stroke / 2}
               y={stroke / 2}
               width={size.w - stroke}
@@ -176,9 +205,8 @@ export function TokenRateBadge({
               stroke="var(--cds-clay)"
               strokeOpacity={0.55}
               strokeWidth={stroke}
-              strokeDasharray={`${perimeter * progress} ${perimeter}`}
+              strokeDasharray={`0 ${perimeter}`}
               strokeDashoffset={-topMid}
-              style={{ transition: "stroke-dasharray 200ms linear" }}
             />
           </svg>
         )}
@@ -207,4 +235,3 @@ function RateRow({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-
