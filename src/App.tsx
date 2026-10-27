@@ -157,6 +157,13 @@ export default function App() {
   const snapshot = dashboard.data;
   const payload = snapshot?.data;
   const busy = dashboard.isFetching;
+  // 倒计时以「请求开始」为基准：请求开始时归零，走满时下一次请求正好开始。
+  // 用 dataUpdatedAt（请求完成时刻）做基准的话，两次完成的间隔比间隔多一个请求耗时，
+  // 进度条走满后必然空等那几秒。
+  const [fetchStart, setFetchStart] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    if (dashboard.isFetching) setFetchStart(Date.now());
+  }, [dashboard.isFetching]);
   const loadError = dashboard.error ? String(dashboard.error) : null;
 
   const summary = payload?.summary ?? null;
@@ -369,7 +376,7 @@ export default function App() {
           <TokenRateBadge
             rate={payload?.tokenRate ?? null}
             windowSec={refreshSec}
-            updatedAt={dashboard.dataUpdatedAt || undefined}
+            fetchStart={fetchStart}
             pending={dashboard.isPending}
           />
           {tab !== "settings" && (

@@ -27,14 +27,14 @@ import { cn } from "@/lib/utils";
 export function TokenRateBadge({
   rate,
   windowSec,
-  updatedAt,
+  fetchStart,
   pending,
 }: {
   rate: TokenRate | null;
   /** 采样窗口（秒）= 当前刷新间隔 */
   windowSec: number;
-  /** 最近一次成功取数的时间（epoch ms）；0/缺省时不画倒计时 */
-  updatedAt?: number;
+  /** 最近一次请求开始的时刻（epoch ms）；缺省时不画倒计时 */
+  fetchStart?: number;
   /** 首次取数中；此时还没有任何快照 */
   pending?: boolean;
 }) {
@@ -50,28 +50,10 @@ export function TokenRateBadge({
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [countdown, setCountdown] = useState("—");
 
-  // 真实刷新周期 = 间隔 + 请求耗时。dataUpdatedAt 是「请求完成」时刻，而
-  // refetchInterval 从完成时刻开始计下一轮，所以两次 updatedAt 的差就是完整周期。
-  // 进度条只按 interval 走的话，走满后必然空等那几秒请求时间——这就是「卡在刷新前」。
-  // 这里用相邻两次的实测间隔作为动画时长，走满时正好是新数据到达。
-  const [periodMs, setPeriodMs] = useState(intervalMs);
-  const prevUpdated = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    if (!updatedAt) return;
-    const prev = prevUpdated.current;
-    prevUpdated.current = updatedAt;
-    if (prev === undefined || updatedAt <= prev) return;
-    const gap = updatedAt - prev;
-    // 只接受合理区间，避免暂停/改间隔时把异常值当成周期
-    if (gap >= intervalMs * 0.6 && gap <= intervalMs * 3) {
-      setPeriodMs(gap);
-    }
-  }, [updatedAt, intervalMs]);
-  useEffect(() => {
-    setPeriodMs(intervalMs);
-    prevUpdated.current = undefined;
-  }, [intervalMs]);
-  const periodSec = Math.max(1, periodMs / 1000);
+  // 进度基准是「请求开始」而不是「请求完成」：请求开始时归零，走满时下一次请求
+  // 正好开始。用 dataUpdatedAt（完成时刻）做基准的话，两次完成的间隔比间隔多一个
+  // 请求耗时，进度条走满后必然空等那几秒——这正是「卡在刷新前」的来源。
+  const periodSec = Math.max(1, windowSec);
 
   // 胶囊宽度随数字变化：量一次，之后跟 ResizeObserver
   useEffect(() => {
@@ -107,13 +89,13 @@ export function TokenRateBadge({
   // window focus、visibilitychange；resync 把动画 currentTime 拽到真实位置，
   // 并立刻刷一次文字。
   useEffect(() => {
-    if (!updatedAt) {
+    if (!fetchStart) {
       setCountdown("—");
       if (countdownRef.current) countdownRef.current.textContent = "—";
       return;
     }
     const text = () => {
-      const remaining = periodMs - (Date.now() - updatedAt);
+      const remaining = intervalMs - (Date.now() - fetchStart);
       const s = remaining > 0 ? `${(remaining / 1000).toFixed(1)}s` : "刷新中…";
       if (countdownRef.current && countdownRef.current.textContent !== s) {
         countdownRef.current.textContent = s;
@@ -121,7 +103,7 @@ export function TokenRateBadge({
       setCountdown((prev) => (prev === s ? prev : s));
     };
     const resync = () => {
-      const elapsed = Math.min(periodMs, Math.max(0, Date.now() - updatedAt));
+      const elapsed = Math.min(intervalMs, Math.max(0, Date.now() - fetchStart));
       const ring = ringRef.current;
       const anim = ring?.getAnimations?.()[0];
       if (anim && typeof anim.currentTime === "number") {
@@ -167,7 +149,7 @@ export function TokenRateBadge({
       window.removeEventListener("focus", resync);
       document.removeEventListener("visibilitychange", resync);
     };
-  }, [updatedAt, periodMs]);
+  }, [fetchStart, intervalMs]);
 
   return (
     <Hint
@@ -212,9 +194,9 @@ export function TokenRateBadge({
                 aria-hidden
                 className="mt-1 h-[2px] w-full overflow-hidden rounded-full bg-border/50"
               >
-                {updatedAt ? (
+                {fetchStart ? (
                   <div
-                    key={`${updatedAt}-${periodMs}`}
+                    key={fetchStart}
                     className="h-full rounded-full bg-[var(--cds-clay)]/70"
                     style={{
                       width: "0%",
@@ -240,14 +222,14 @@ export function TokenRateBadge({
         ref={trackRef}
         role="status"
         aria-label={`实时 Token 速度 ${rate ? `${fmtSpeed(speed)} tok/s` : "未知"}${
-          updatedAt ? `，${countdown} 后刷新` : ""
+          fetchStart ? `，${countdown} 后刷新` : ""
         }`}
         className={cn(
           "relative flex h-7 select-none items-center gap-1 rounded-full px-2.5",
           "bg-[var(--cds-segmented-track)] transition-colors",
         )}
       >
-        {perimeter > 0 && (updatedAt ?? 0) > 0 && (
+        {perimeter > 0 && (fetchStart ?? 0) > 0 && (
           <svg
             aria-hidden
             className="pointer-events-none absolute inset-0"
@@ -267,7 +249,7 @@ export function TokenRateBadge({
             />
             <rect
               // 刷新一次就换 key，让 CSS 动画从头播放
-              key={`${updatedAt}-${Math.round(perimeter)}-${periodMs}`}
+              key={`${fetchStart}-${Math.round(perimeter)}`}
               ref={ringRef}
               x={stroke / 2}
               y={stroke / 2}
@@ -324,6 +306,8 @@ function RateRow({
     </div>
   );
 }
+
+
 
 
 
