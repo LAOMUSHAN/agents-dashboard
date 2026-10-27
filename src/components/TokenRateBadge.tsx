@@ -46,8 +46,32 @@ export function TokenRateBadge({
 
   const trackRef = useRef<HTMLDivElement>(null);
   const countdownRef = useRef<HTMLSpanElement>(null);
+  const ringRef = useRef<SVGRectElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [countdown, setCountdown] = useState("—");
+
+  // 真实刷新周期 = 间隔 + 请求耗时。dataUpdatedAt 是「请求完成」时刻，而
+  // refetchInterval 从完成时刻开始计下一轮，所以两次 updatedAt 的差就是完整周期。
+  // 进度条只按 interval 走的话，走满后必然空等那几秒请求时间——这就是「卡在刷新前」。
+  // 这里用相邻两次的实测间隔作为动画时长，走满时正好是新数据到达。
+  const [periodMs, setPeriodMs] = useState(intervalMs);
+  const prevUpdated = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!updatedAt) return;
+    const prev = prevUpdated.current;
+    prevUpdated.current = updatedAt;
+    if (prev === undefined || updatedAt <= prev) return;
+    const gap = updatedAt - prev;
+    // 只接受合理区间，避免暂停/改间隔时把异常值当成周期
+    if (gap >= intervalMs * 0.6 && gap <= intervalMs * 3) {
+      setPeriodMs(gap);
+    }
+  }, [updatedAt, intervalMs]);
+  useEffect(() => {
+    setPeriodMs(intervalMs);
+    prevUpdated.current = undefined;
+  }, [intervalMs]);
+  const periodSec = Math.max(1, periodMs / 1000);
 
   // 胶囊宽度随数字变化：量一次，之后跟 ResizeObserver
   useEffect(() => {
@@ -74,25 +98,76 @@ export function TokenRateBadge({
       ? 2 * straightTop + 2 * (size.h - stroke - 2 * r) + 2 * Math.PI * r
       : 0;
 
-  // 倒计时文字：ref 直写，200ms 一跳也不触发渲染
+  // 倒计时文字 + 恢复同步。
+  //
+  // 页面被遮挡/最小化时 Chromium 会把定时器节流到分钟级、并停止提交合成帧：
+  // 文字停住、画面冻结在最后一帧，而 CSS 动画的时间线仍在后台推进。恢复可见后
+  // 浏览器不会主动补帧，要等到下一次 React 重渲染才跳过去——表现就是「进度卡住，
+  // 刷新时突然归零」。这里在三种信号上主动 resync：定时器间隔异常（被节流过）、
+  // window focus、visibilitychange；resync 把动画 currentTime 拽到真实位置，
+  // 并立刻刷一次文字。
   useEffect(() => {
     if (!updatedAt) {
       setCountdown("—");
       if (countdownRef.current) countdownRef.current.textContent = "—";
       return;
     }
-    const tick = () => {
-      const remaining = intervalMs - (Date.now() - updatedAt);
-      const text = remaining > 0 ? `${(remaining / 1000).toFixed(1)}s` : "刷新中…";
-      if (countdownRef.current && countdownRef.current.textContent !== text) {
-        countdownRef.current.textContent = text;
+    const text = () => {
+      const remaining = periodMs - (Date.now() - updatedAt);
+      const s = remaining > 0 ? `${(remaining / 1000).toFixed(1)}s` : "刷新中…";
+      if (countdownRef.current && countdownRef.current.textContent !== s) {
+        countdownRef.current.textContent = s;
       }
-      setCountdown((prev) => (prev === text ? prev : text));
+      setCountdown((prev) => (prev === s ? prev : s));
     };
-    tick();
-    const id = window.setInterval(tick, 200);
-    return () => window.clearInterval(id);
-  }, [updatedAt, intervalMs]);
+    const resync = () => {
+      const elapsed = Math.min(periodMs, Math.max(0, Date.now() - updatedAt));
+      const ring = ringRef.current;
+      const anim = ring?.getAnimations?.()[0];
+      if (anim && typeof anim.currentTime === "number") {
+        if (anim.playState === "finished") anim.play();
+        anim.currentTime = elapsed;
+        // 光设置 currentTime 不一定能让冻结过的合成器出一帧，微调透明度逼它重绘，
+        // 下一帧再改回来（值本身没有视觉差异）。
+        ring!.style.strokeOpacity = "0.56";
+        requestAnimationFrame(() => {
+          if (ring) ring.style.strokeOpacity = "";
+        });
+      }
+      text();
+    };
+
+    text();
+    let last = Date.now();
+    const id = window.setInterval(() => {
+      const now = Date.now();
+      // 间隔明显超过 200ms，说明这段被节流过，画面大概率停在旧帧上
+      if (now - last > 1000) resync();
+      last = now;
+      text();
+    }, 200);
+
+    // rAF 帧间隔检测：页面被遮挡时合成器停止出帧，rAF 也随之停摆；
+    // 恢复后的第一帧间隔会远大于 16ms，这是「画面刚解冻」最可靠的信号。
+    // 阈值取 2s，避开后台 1fps 的正常降频。
+    let raf = 0;
+    let lastFrame = 0;
+    const watch = (ts: number) => {
+      if (lastFrame && ts - lastFrame > 800) resync();
+      lastFrame = ts;
+      raf = requestAnimationFrame(watch);
+    };
+    raf = requestAnimationFrame(watch);
+
+    window.addEventListener("focus", resync);
+    document.addEventListener("visibilitychange", resync);
+    return () => {
+      window.clearInterval(id);
+      cancelAnimationFrame(raf);
+      window.removeEventListener("focus", resync);
+      document.removeEventListener("visibilitychange", resync);
+    };
+  }, [updatedAt, periodMs]);
 
   return (
     <Hint
@@ -139,11 +214,11 @@ export function TokenRateBadge({
               >
                 {updatedAt ? (
                   <div
-                    key={updatedAt}
+                    key={`${updatedAt}-${periodMs}`}
                     className="h-full rounded-full bg-[var(--cds-clay)]/70"
                     style={{
                       width: "0%",
-                      animation: `rate-bar-fill ${windowSec}s linear forwards`,
+                      animation: `rate-bar-fill ${periodSec}s linear forwards`,
                     }}
                   />
                 ) : null}
@@ -192,7 +267,8 @@ export function TokenRateBadge({
             />
             <rect
               // 刷新一次就换 key，让 CSS 动画从头播放
-              key={`${updatedAt}-${Math.round(perimeter)}`}
+              key={`${updatedAt}-${Math.round(perimeter)}-${periodMs}`}
+              ref={ringRef}
               x={stroke / 2}
               y={stroke / 2}
               width={size.w - stroke}
@@ -207,7 +283,7 @@ export function TokenRateBadge({
               style={
                 {
                   "--rate-ring-p": perimeter,
-                  animation: `rate-ring-fill ${windowSec}s linear forwards`,
+                  animation: `rate-ring-fill ${periodSec}s linear forwards`,
                 } as CSSProperties
               }
             />
@@ -248,4 +324,7 @@ function RateRow({
     </div>
   );
 }
+
+
+
 
