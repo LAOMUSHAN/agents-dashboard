@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { CalendarRange } from "lucide-react";
 import type { Range } from "../api";
+import { rangeForPreset } from "../data/range";
 import type { Preset } from "../data/requests";
+import { useTodayStart } from "../hooks/useTodayStart";
 import { Dropdown, type DropdownOption } from "./Dropdown";
 
 // 预设类型归数据层所有（请求描述的一部分），这里转出以兼容既有引用
@@ -38,19 +40,6 @@ function readStoredCustom(): { from: string; to: string } {
   return { from: "", to: "" };
 }
 
-function startOfToday(): number {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function startOfYesterday(): number {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
 /** 把 preset(+自定义日期)换算成查询范围 */
 export function useRange(): {
   preset: Preset;
@@ -68,6 +57,8 @@ export function useRange(): {
   const [preset, setPresetState] = useState<Preset>(initialPreset);
   const [customFrom, setCustomFrom] = useState(initialPreset === "custom" ? storedCustom.from : "");
   const [customTo, setCustomTo] = useState(initialPreset === "custom" ? storedCustom.to : "");
+  // 跨零点时这个值会变，「今天/昨天/近 N 天」的窗口随之翻页
+  const todayStart = useTodayStart();
 
   const setPreset = (p: Preset) => {
     setPresetState(p);
@@ -93,28 +84,12 @@ export function useRange(): {
   };
 
   // 用 useMemo 稳定 range 的对象身份,避免依赖它的 useEffect 无限循环。
-  // 预设范围不设 to:上界由服务端按每次查询的时刻决定,定时刷新才能查到新产生的数据
-  const range = useMemo(() => {
-    const now = Date.now();
-    switch (preset) {
-      case "today":
-        return { from: startOfToday() };
-      // 昨天的数据不会新增,固定上界为今天零点
-      case "yesterday":
-        return { from: startOfYesterday(), to: startOfToday() };
-      case "7d":
-        return { from: now - 7 * 86400_000 };
-      case "30d":
-        return { from: now - 30 * 86400_000 };
-      case "custom": {
-        const from = customFrom ? new Date(customFrom + "T00:00:00").getTime() : undefined;
-        const to = customTo ? new Date(customTo + "T23:59:59.999").getTime() : undefined;
-        return { from, to };
-      }
-      default:
-        return {};
-    }
-  }, [preset, customFrom, customTo]);
+  // 预设范围不设 to:上界由服务端按每次查询的时刻决定,定时刷新才能查到新产生的数据。
+  // todayStart 进入依赖:页面跨零点不刷新时,「今天」仍是新的一天而不是挂载日。
+  const range = useMemo(
+    () => rangeForPreset(preset, todayStart, Date.now(), customFrom, customTo),
+    [preset, todayStart, customFrom, customTo],
+  );
 
   return { preset, setPreset, customFrom, customTo, setCustom, range };
 }
@@ -144,7 +119,9 @@ const YEARS_PER_PAGE = 12;
 
 /** 范围日历:先点开始再点结束,替代原生 date input;标题里的年/月可点开快选面板 */
 function RangeCalendar({ from, to, onPick, onClear, onDone }: RangeCalendarProps) {
-  const now = new Date();
+  // 日历常驻在 Dropdown 里，跨零点后「今天」高亮和未来日期禁用也要跟着换天
+  const todayStart = useTodayStart();
+  const now = useMemo(() => new Date(todayStart), [todayStart]);
   const nowY = now.getFullYear();
   const nowM = now.getMonth();
   const [view, setView] = useState(() => (from ? parseKey(from) : new Date()));

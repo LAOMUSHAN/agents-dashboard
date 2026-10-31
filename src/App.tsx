@@ -31,6 +31,7 @@ import type { Committed } from "./data/committed";
 import { dashboardKeys, dashboardViewKey, useDashboardQuery } from "./data/dashboard";
 import type { DashboardRequest, ViewRequest } from "./data/requests";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
+import { syncToday } from "./hooks/useTodayStart";
 import { getThemeMode, setThemeMode, type ThemeMode } from "./theme";
 import {
   defaultOverviewLayout,
@@ -294,6 +295,9 @@ export default function App() {
       .catch(() => undefined);
     listen("window-shown", () => {
       setVisible(true);
+      // WebView 在托盘里可能被挂起，零点定时器不保证按时触发；
+      // 唤回时先校时，再让查询按新的日界重取。
+      syncToday();
       void queryClient.invalidateQueries({ queryKey: dashboardKeys.all });
     })
       .then((u) => (unShow = u))

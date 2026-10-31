@@ -11,6 +11,8 @@ import type { HeatCell } from "../../shared/types";
 import type { Committed } from "../data/committed";
 import type { ViewRequest } from "../data/requests";
 import { fmtTokens } from "../format";
+import { useTodayStart } from "../hooks/useTodayStart";
+import { DAY_MS, addDays, startOfDay } from "../lib/day";
 import { barScale } from "./ui/data-viz";
 import { HintCard, Hint, HintText } from "./ui/hint";
 import { Panel } from "./ui/panel";
@@ -46,15 +48,10 @@ const HOURS = Array.from({ length: 24 }, (_, h) => h);
 const DOW_CN = ["日", "一", "二", "三", "四", "五", "六"];
 const LEVELS = ["bg-muted/45", "bg-clay/30", "bg-clay/50", "bg-clay/75", "bg-clay"];
 const GRID_COLS = "84px repeat(24, minmax(0, 1fr)) 72px 54px";
-const DAY_MS = 86_400_000;
 const HOUR_VIEW_OPTIONS = [
   { value: "hour", label: "按小时" },
   { value: "day", label: "按天" },
 ] as const;
-
-function startOfDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
 
 function dayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -63,12 +60,6 @@ function dayKey(d: Date): string {
 function parseDay(key: string): Date {
   const [y, m, d] = key.split("-").map(Number);
   return new Date(y, m - 1, d);
-}
-
-function addDays(d: Date, n: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
 }
 
 function fmtDay(key: string): string {
@@ -473,7 +464,28 @@ export function ActivityHeatmap({
 }) {
   const { request, data: cells } = snapshot;
   const { preset, range, customFrom, customTo } = request;
-  const today = useMemo(() => startOfDay(new Date()), []);
+  // 「今天」锚点跟随快照，而不是墙钟：跨零点时新的一天先到、数据后到，
+  // 若直接用当前时间，旧快照会被套进新一天的窗口（出现整行空数据）。
+  // 只有范围本身不带日期锚点的「全部/自定义」才用共享日界时钟。
+  const liveTodayStart = useTodayStart();
+  const today = useMemo(() => {
+    let anchor: number | undefined;
+    switch (preset) {
+      case "today":
+        anchor = range.from;
+        break;
+      case "yesterday":
+        anchor = range.to;
+        break;
+      case "7d":
+        anchor = range.from != null ? range.from + 7 * DAY_MS : undefined;
+        break;
+      case "30d":
+        anchor = range.from != null ? range.from + 30 * DAY_MS : undefined;
+        break;
+    }
+    return new Date(startOfDay(anchor ?? liveTodayStart));
+  }, [preset, range.from, range.to, liveTodayStart]);
   const todayKey = dayKey(today);
   const yesterdayKey = dayKey(addDays(today, -1));
   const cellDays = useMemo(() => [...new Set(cells.map((c) => c.day))].sort(), [cells]);
