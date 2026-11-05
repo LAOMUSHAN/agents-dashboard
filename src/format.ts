@@ -123,14 +123,15 @@ export function fmtRate(n: number | null | undefined): string {
 }
 
 /**
- * 缓存命中率 = 缓存读 ÷ 总输入。
- * zcode 的 input_tokens 为总 prompt tokens(已含缓存命中部分),
- * cacheRead 是其子集(OpenAI usage 口径),故分母不再叠加 cacheRead。
- * 总输入为 0 时显示 "-"。
+ * 缓存命中率 = 缓存读 ÷ 总 prompt。
+ * `input` 是统一表的 input_tokens：已含缓存读，但不含 cache_creation（计价口径），
+ * 所以分母要加回 cacheWrite：read / (input + write)。
+ * 总 prompt 为 0 时显示 "-"。
  */
-export function fmtHitRate(cacheRead: number, input: number): string {
-  if (input <= 0) return "-";
-  return `${((cacheRead / input) * 100).toFixed(1)}%`;
+export function fmtHitRate(cacheRead: number, input: number, cacheWrite = 0): string {
+  const total = input + Math.max(cacheWrite, 0);
+  if (total <= 0) return "-";
+  return `${((cacheRead / total) * 100).toFixed(1)}%`;
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");

@@ -154,7 +154,7 @@ export function StackBar({
   );
 }
 
-/** 耗时瀑布：首 token（陶土）+ 解码（暖灰）；外宽按 asinh 压缩，内部分段保持真实比例 */
+/** 耗时瀑布：首 token（灰）+ 解码（陶土）；外宽按 asinh 压缩，内部分段保持真实比例 */
 export function Waterfall({
   durationMs,
   ttftMs,
@@ -169,33 +169,51 @@ export function Waterfall({
   className?: string;
 }) {
   const total = Math.max(durationMs ?? 0, 0);
-  if (total <= 0) {
+  // 没有耗时或没有首 token 时间戳时无法拆分：只留空轨道
+  if (total <= 0 || ttftMs == null) {
     return <div className={cn("h-1 w-full rounded-full bg-accent/60", className)} aria-hidden />;
   }
   const width = barScale(total, Math.max(maxMs, total, 1), knee) * 100;
-  const ttft = Math.min(Math.max(ttftMs ?? 0, 0), total);
+  const ttft = Math.min(Math.max(ttftMs, 0), total);
   const ttftPct = (ttft / total) * 100;
 
   return (
     <div
-      title="条形按 asinh 压缩；陶土段为首 token，灰色段为解码"
       className={cn("h-1 w-full overflow-hidden rounded-full bg-accent/60", className)}
       aria-hidden
     >
       <div className="flex h-full overflow-hidden rounded-full" style={{ width: `${width}%` }}>
-        <div style={{ width: `${ttftPct}%`, background: "var(--cds-clay)" }} />
-        <div style={{ width: `${100 - ttftPct}%`, background: "var(--cds-gray-400)" }} />
+        <div style={{ width: `${ttftPct}%`, background: "var(--cds-gray-400)" }} />
+        <div style={{ width: `${100 - ttftPct}%`, background: "var(--cds-clay)" }} />
       </div>
     </div>
   );
 }
 
-/** 命中率药丸：≥80% 绿、≥50% 琥珀、其余红；无输入时灰色占位 */
-export function HitRatePill({ read, input }: { read: number; input: number }) {
-  if (!input) return <span className="text-[11px] text-muted-foreground">—</span>;
-  const rate = read / input;
+/**
+ * 命中率药丸：缓存读 ÷ 总 prompt（未缓存输入 + 缓存读 + 缓存写）。
+ * `input` 是统一表的 input_tokens（含缓存读、不含缓存写），所以分母要把 write 加回来；
+ * 否则 Claude 这种每轮都写缓存的源会永远显示 100%。
+ */
+export function HitRatePill({
+  read,
+  input,
+  write = 0,
+}: {
+  read: number;
+  input: number;
+  write?: number;
+}) {
+  const total = input + Math.max(write, 0);
+  if (total <= 0) return <span className="text-[11px] text-muted-foreground">—</span>;
+  const rate = read / total;
   const tone =
     rate >= 0.8 ? "text-success bg-success/10" : rate >= 0.5 ? "text-warn bg-warn/10" : "text-danger bg-danger/10";
+  // 接近 100% 时保留两位并向下取整，避免 99.99% 被四舍五入成 100.0% 而看不出未命中部分
+  const pct =
+    rate >= 0.9999
+      ? (Math.floor(rate * 10000) / 100).toFixed(2)
+      : (rate * 100).toFixed(1);
   return (
     <span
       className={cn(
@@ -204,7 +222,7 @@ export function HitRatePill({ read, input }: { read: number; input: number }) {
       )}
     >
       <span className="size-1 rounded-full bg-current opacity-70" />
-      {(rate * 100).toFixed(1)}%
+      {pct}%
     </span>
   );
 }

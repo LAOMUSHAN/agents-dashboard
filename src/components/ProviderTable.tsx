@@ -32,6 +32,7 @@ type Row = {
   requests: number;
   sessions: number;
   cacheRead: number;
+  cacheCreate: number;
   input: number;
   output: number;
   total: number;
@@ -95,6 +96,7 @@ export function ProviderTable({
         requests: p.requests,
         sessions: p.sessions,
         cacheRead: p.cacheReadTokens,
+        cacheCreate: p.cacheCreateTokens,
         input: p.inputTokens,
         output: p.outputTokens,
         total: p.totalTokens,
@@ -110,6 +112,7 @@ export function ProviderTable({
           requests: m.requests,
           sessions: m.sessions,
           cacheRead: m.cacheReadTokens,
+          cacheCreate: m.cacheCreateTokens,
           input: m.inputTokens,
           output: m.outputTokens,
           total: m.inputTokens + m.outputTokens,
@@ -130,6 +133,7 @@ export function ProviderTable({
         requests: m.requests,
         sessions: m.sessions,
         cacheRead: m.cacheReadTokens,
+        cacheCreate: m.cacheCreateTokens,
         input: m.inputTokens,
         output: m.outputTokens,
         total: m.inputTokens + m.outputTokens,
@@ -148,6 +152,7 @@ export function ProviderTable({
       requests: p.requests,
       sessions: p.sessions,
       cacheRead: p.cacheReadTokens,
+      cacheCreate: p.cacheCreateTokens,
       input: p.inputTokens,
       output: p.outputTokens,
       total: p.totalTokens,
@@ -254,7 +259,7 @@ export function ProviderTable({
                     </td>
                     <td className={TD_NUM}>{fmtNumber(r.sessions)}</td>
                     <td className={cn(TD, "text-center")}>
-                      <HitRatePill read={r.cacheRead} input={r.input} />
+                      <HitRatePill read={r.cacheRead} input={r.input} write={r.cacheCreate} />
                     </td>
                     <td className={TD_NUM}>
                       <div className="flex w-full flex-col items-end gap-1">
@@ -300,7 +305,7 @@ export function ProviderTable({
                         </td>
                         <td className={TD_NUM}>{fmtNumber(c.sessions)}</td>
                         <td className={cn(TD, "text-center")}>
-                          <HitRatePill read={c.cacheRead} input={c.input} />
+                          <HitRatePill read={c.cacheRead} input={c.input} write={c.cacheCreate} />
                         </td>
                         <td className={TD_NUM}>
                           <div className="flex w-full flex-col items-end gap-1">

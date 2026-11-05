@@ -32,6 +32,7 @@ import { dashboardKeys, dashboardViewKey, useDashboardQuery } from "./data/dashb
 import type { DashboardRequest, ViewRequest } from "./data/requests";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { syncToday } from "./hooks/useTodayStart";
+import { scopeLabel, sourceLabel } from "./lib/source";
 import { getThemeMode, setThemeMode, type ThemeMode } from "./theme";
 import {
   defaultOverviewLayout,
@@ -69,12 +70,12 @@ function getRefreshSec(): number {
   return REFRESH_OPTIONS.includes(v) ? v : 5;
 }
 
-// 数据源范围：全部 / zcode / DSH；落盘 ui-prefs.json，localStorage 只作即时缓存
+// 数据源范围：全部 / zcode / DSH / Claude；落盘 ui-prefs.json，localStorage 只作即时缓存
 const SOURCE_KEY = "sourceScope";
 
 function getInitialSource(): SourceFilter {
   const v = localStorage.getItem(SOURCE_KEY);
-  return v === "zcode" || v === "dsh" ? v : "all";
+  return v === "zcode" || v === "dsh" || v === "claude" ? v : "all";
 }
 
 // 内容分区:面板较多,按主题拆成标签页避免整页无限滚动。
@@ -187,7 +188,7 @@ export default function App() {
       providers.map((p) => [
         p.providerId,
         (counts.get(p.name) ?? 0) > 1
-          ? `${p.name} · ${p.source === "dsh" ? "DSH" : "zcode"}`
+          ? `${p.name} · ${sourceLabel(p.source)}`
           : p.name,
       ]),
     );
@@ -276,7 +277,7 @@ export default function App() {
           setRefreshSecState(v);
         }
         const s = prefs.sourceScope;
-        if (s === "all" || s === "zcode" || s === "dsh") {
+        if (s === "all" || s === "zcode" || s === "dsh" || s === "claude") {
           localStorage.setItem(SOURCE_KEY, s);
           setSource(s);
         }
@@ -354,7 +355,7 @@ export default function App() {
         onToggleCollapsed={toggleNav}
         version={__APP_VERSION__}
         status={{
-          scopeLabel: source === "all" ? "全部来源" : source === "dsh" ? "仅 DSH" : "仅 zcode",
+          scopeLabel: scopeLabel(source),
           sources,
           refreshSec,
           updatedAt: dashboard.dataUpdatedAt || undefined,

@@ -28,10 +28,12 @@ function toRow(
   inputTokens: number,
   outputTokens: number,
   cacheReadTokens: number,
+  cacheWriteTokens: number,
 ): WasteRow | null {
   // 无输入的行没有命中率可言(输出占比也无从谈起),直接排除
   if (inputTokens <= 0 && outputTokens <= 0) return null;
-  const hitRate = inputTokens > 0 ? cacheReadTokens / inputTokens : null;
+  const promptTotal = inputTokens + cacheWriteTokens;
+  const hitRate = promptTotal > 0 ? cacheReadTokens / promptTotal : null;
   const outputShare = inputTokens + outputTokens > 0 ? outputTokens / (inputTokens + outputTokens) : 0;
   const miss = hitRate == null ? 0.5 : 1 - hitRate; // 无缓存数据按中性 50% 计
   return {
@@ -72,33 +74,49 @@ export function WasteRankPanel({
     const sumBy = <T,>(
       items: T[],
       key: (x: T) => string,
-      val: (x: T) => { input: number; output: number; cache: number },
+      val: (x: T) => { input: number; output: number; cache: number; cacheWrite: number },
     ) => {
-      const map = new Map<string, { input: number; output: number; cache: number }>();
+      const map = new Map<
+        string,
+        { input: number; output: number; cache: number; cacheWrite: number }
+      >();
       for (const it of items) {
         const k = key(it);
         const v = val(it);
-        const cur = map.get(k) ?? { input: 0, output: 0, cache: 0 };
+        const cur = map.get(k) ?? { input: 0, output: 0, cache: 0, cacheWrite: 0 };
         cur.input += v.input;
         cur.output += v.output;
         cur.cache += v.cache;
+        cur.cacheWrite += v.cacheWrite;
         map.set(k, cur);
       }
-      return [...map.entries()].map(([k, v]) => toRow(k, v.input, v.output, v.cache));
+      return [...map.entries()].map(([k, v]) =>
+        toRow(k, v.input, v.output, v.cache, v.cacheWrite),
+      );
     };
     const list =
       dim === "project"
-        ? projects.map((p) => toRow(p.name || p.directory, p.inputTokens, p.outputTokens, p.cacheReadTokens))
+        ? projects.map((p) =>
+            toRow(
+              p.name || p.directory,
+              p.inputTokens,
+              p.outputTokens,
+              p.cacheReadTokens,
+              p.cacheCreateTokens,
+            ),
+          )
         : dim === "model"
           ? sumBy(models, (m) => m.modelId, (m) => ({
               input: m.inputTokens,
               output: m.outputTokens,
               cache: m.cacheReadTokens,
+              cacheWrite: m.cacheCreateTokens,
             }))
           : sumBy(providers, (p) => p.name, (p) => ({
               input: p.inputTokens,
               output: p.outputTokens,
               cache: p.cacheReadTokens,
+              cacheWrite: p.cacheCreateTokens,
             }));
     return list
       .filter((r): r is WasteRow => r != null)

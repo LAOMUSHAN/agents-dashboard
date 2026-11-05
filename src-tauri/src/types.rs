@@ -98,6 +98,9 @@ pub struct PricingConfig {
     pub usd_cny_rate: f64,
     #[serde(default)]
     pub models: PricingMap,
+    /// 已经做过一次性默认价迁移的数据源（如 "claude"）；避免每次启动覆盖用户改价
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seeded_sources: Vec<String>,
 }
 
 impl Default for PricingConfig {
@@ -106,6 +109,7 @@ impl Default for PricingConfig {
             display_currency: default_currency(),
             usd_cny_rate: default_rate(),
             models: PricingMap::new(),
+            seeded_sources: Vec::new(),
         }
     }
 }

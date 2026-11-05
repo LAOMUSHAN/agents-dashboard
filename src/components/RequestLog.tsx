@@ -4,6 +4,7 @@ import { api, type Range } from "../api";
 import {
   fmtCostIn,
   fmtCostSplit,
+  fmtDuration,
   fmtNumber,
   fmtSeconds,
   fmtSpeed,
@@ -184,10 +185,104 @@ function ModelUsageCard({ main, sub }: { main: ModelUsage[]; sub: ModelUsage[] }
   );
 }
 
+/** 悬停卡里的一行：左侧标签（可带色点），右侧数值 + 占比 */
+function CardRow({
+  label,
+  dot,
+  value,
+  share,
+}: {
+  label: string;
+  dot?: string;
+  value: string;
+  share?: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="flex items-center gap-1.5 text-muted-foreground">
+        {dot && <span className={cn("size-1.5 shrink-0 rounded-full", dot)} aria-hidden />}
+        {label}
+      </span>
+      <span className="shrink-0 tabular-nums">
+        {value}
+        {share && <span className="ml-1.5 text-[10px] text-muted-foreground">{share}</span>}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 悬停卡：耗时构成（首 token 灰、解码陶土）。
+ * 单请求的条长按 asinh 与组内最长请求比较；会话汇总的条长占满，只看颜色占比。
+ */
+type DurationCardData =
+  | { kind: "request"; durationMs: number | null; ttftMs: number | null; maxMs: number; status: string }
+  | { kind: "session"; totalMs: number; ttftSumMs: number; ttftCount: number; requests: number };
+
+function DurationBreakdownCard({ data }: { data: DurationCardData }) {
+  const session = data.kind === "session";
+  const totalMs = session ? data.totalMs : data.durationMs;
+  const ttftMs = session ? (data.ttftCount > 0 ? data.ttftSumMs : null) : data.ttftMs;
+  const total = Math.max(totalMs ?? 0, 0);
+  const done = total > 0;
+  const ttft = !done || ttftMs == null ? null : Math.min(Math.max(ttftMs, 0), total);
+  const decode = ttft == null ? null : Math.max(total - ttft, 0);
+  const share = (v: number | null) => (v != null && total > 0 ? `${Math.round((v / total) * 100)}%` : "-");
+  const avgTtft = session && data.ttftCount > 0 ? data.ttftSumMs / data.ttftCount : null;
+
+  const footer = !done
+    ? session
+      ? "该会话没有耗时数据，无法拆分"
+      : data.status === "running"
+        ? "请求尚未完成，暂无耗时构成"
+        : "该请求没有耗时数据，无法拆分"
+    : ttft == null
+      ? session
+        ? "该会话缺少首 token 时间戳，无法拆分"
+        : "该请求缺少首 token 时间戳，无法拆分"
+      : session
+        ? `按 ${data.requests} 条请求汇总${data.ttftCount < data.requests ? ` · ${data.ttftCount} 条有首 token 时间戳` : ""}`
+        : `条长按 asinh 压缩 · 组内最长 ${fmtDuration(data.maxMs)}`;
+
+  return (
+    <div>
+      <div className="text-[10px] font-medium tracking-[0.04em] text-muted-foreground">
+        {session ? `耗时构成 · ${data.requests} 条请求` : "耗时构成"}
+      </div>
+      <Waterfall
+        durationMs={totalMs}
+        ttftMs={ttftMs}
+        maxMs={session ? Math.max(total, 1) : data.maxMs}
+        className="mt-2 h-1.5"
+      />
+      <div className="mt-2.5 space-y-1 text-[11px]">
+        <CardRow
+          label="首 token"
+          dot="bg-[var(--cds-gray-400)]"
+          value={fmtDuration(ttft)}
+          share={ttft == null ? undefined : share(ttft)}
+        />
+        <CardRow
+          label="解码"
+          dot="bg-clay"
+          value={fmtDuration(decode)}
+          share={decode == null ? undefined : share(decode)}
+        />
+        {session && <CardRow label="平均首 token" value={fmtDuration(avgTtft)} />}
+        <CardRow label="总耗时" value={fmtDuration(totalMs)} />
+      </div>
+      <div className="mt-2 border-t border-border/50 pt-1.5 text-[9.5px] leading-snug text-muted-foreground/70">
+        {footer}
+      </div>
+    </div>
+  );
+}
+
 function groupStats(requests: RequestRow[]) {
   const input = requests.reduce((s, r) => s + r.inputTokens, 0);
   const output = requests.reduce((s, r) => s + r.outputTokens, 0);
   const cacheRead = requests.reduce((s, r) => s + r.cacheReadTokens, 0);
+  const cacheCreate = requests.reduce((s, r) => s + r.cacheCreateTokens, 0);
   const costUsd = requests.reduce((s, r) => (isCnyCurrency(r.currency) ? s : s + r.cost), 0);
   const costCny = requests.reduce((s, r) => (isCnyCurrency(r.currency) ? s + r.cost * moneyRate() : s), 0);
   const errors = requests.reduce((s, r) => s + (r.status === "error" ? 1 : 0), 0);
@@ -223,6 +318,7 @@ function groupStats(requests: RequestRow[]) {
     input,
     output,
     cacheRead,
+    cacheCreate,
     costUsd,
     costCny,
     errors,
@@ -232,6 +328,8 @@ function groupStats(requests: RequestRow[]) {
     speed: durationAll > 0 ? outputAll / (durationAll / 1000) : null,
     decode: decodeDuration > 0 ? decodeOutput / (decodeDuration / 1000) : null,
     ttft: ttftCount > 0 ? ttftSum / ttftCount : null,
+    ttftSum,
+    ttftCount,
   };
 }
 
@@ -352,16 +450,14 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
   const allocate = useCallback(() => {
     const table = tableRef.current;
     const nat = naturalRef.current;
-    if (!table || !nat || nat.length < 9) return;
+    if (!table || !nat || nat.length < 8) return;
     const container = table.parentElement;
     const W = container?.clientWidth ?? table.getBoundingClientRect().width;
     const timeNat = nat[1];
-    // 首 tok 的保底宽度 = 已加载数据里最长的 tokens 数字宽度（nat[5] 正是该数字 + 内边距）
-    const ttftW = Math.max(nat[7], nat[5]);
     // 模型列只显示「主智能体用量最多的模型 + 其他模型数」，自然宽即最终宽
     const model = nat[2];
-    // 除模型外的固定列：耗时、命中率、速度、首 tok、费用
-    const fixedRest = nat[3] + nat[4] + nat[6] + ttftW + nat[8];
+    // 除模型外的固定列：耗时（含首 token 行）、命中率、速度、费用
+    const fixedRest = nat[3] + nat[4] + nat[6] + nat[7];
     const tokensNat = Math.max(nat[5], TOKEN_BAR_MIN + 16);
     const tokensMin = nat[5];
     let tokens = tokensNat;
@@ -370,13 +466,13 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
 
     // 余量不再全给「对话」列：
     //  - 对话正文放得下时按自然宽（不截断），余量全变成间距；
-    //  - 放不下时对话最多拿余量的 70%，其余 30% 均分成 8 个列间距；
+    //  - 放不下时对话最多拿余量的 70%，其余 30% 均分成 7 个列间距；
     //  - 连 112px 下限都保不住时走下面的压缩级联。
     const titleNat = nat[0];
     let gap = 0;
     if (title >= TITLE_MIN) {
       const target = Math.min(titleNat, Math.max(TITLE_MIN, title * 0.7));
-      gap = (title - target) / 8;
+      gap = (title - target) / 7;
       title = target;
     }
     setColGap(gap > 0.5 ? gap : 0);
@@ -391,8 +487,7 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
         nat[4] + gap,
         tokens + gap,
         nat[6] + gap,
-        ttftW + gap,
-        nat[8] + gap,
+        nat[7] + gap,
       ]);
       return;
     }
@@ -420,7 +515,7 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
     }
     setTableMinW(W < floor ? floor : undefined);
     setTimeLevel(time >= timeNat - 2 ? 0 : time >= 82 ? 1 : time >= 64 ? 2 : 3);
-    setColW([title, time, model, nat[3], nat[4], tokens, nat[6], ttftW, nat[8]]);
+    setColW([title, time, model, nat[3], nat[4], tokens, nat[6], nat[7]]);
   }, []);
 
   // 用一份隐藏的 auto 布局副本量每列的自然宽度：width:max-content 保证不被挤压。
@@ -456,7 +551,7 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
 
   const emptyState = (text: string, icon = false) => (
     <tr>
-      <td colSpan={9} className="px-2 py-14">
+      <td colSpan={8} className="px-2 py-14">
         <div className="flex flex-col items-center gap-2 text-[13px] text-muted-foreground">
           {icon && <ScrollText size={18} className="opacity-50" />}
           {text}
@@ -501,10 +596,29 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
               <th className={cn(TH, "text-left")}>时间</th>
               <th className={cn(TH, "text-left")}>模型</th>
               <th className={TH_NUM}>耗时</th>
-              <th className={cn(TH_NUM, "text-center")}>命中率</th>
-              <th className={TH_NUM}>Tokens</th>
+              <th className={cn(TH_NUM, "text-center")}>
+                <Hint
+                  content={
+                    <HintText title="缓存命中率">
+                      缓存读 ÷ 总 prompt（未缓存输入 + 缓存读 + 缓存写）。缓存写是这一轮新写入缓存的部分，算未命中；Claude Code 的命中率通常在 95–99%，不会正好 100%。
+                    </HintText>
+                  }
+                >
+                  <span>命中率</span>
+                </Hint>
+              </th>
+              <th className={TH_NUM}>
+                <Hint
+                  content={
+                    <HintText title="Tokens 口径">
+                      输入（含缓存读）+ 输出。Claude 的输入绝大部分是缓存读，不是新增 token；缓存写和输出才更接近实际新增量。
+                    </HintText>
+                  }
+                >
+                  <span>Tokens</span>
+                </Hint>
+              </th>
               <th className={TH_NUM}>速度</th>
-              <th className={TH_NUM}>首 tok</th>
               <th className={TH_NUM}>费用</th>
             </tr>
           </thead>
@@ -591,11 +705,33 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
                         )}
                       </div>
                     </td>
-                    <td className={cn(TD_NUM, "text-[11.5px] text-muted-foreground")}>
-                      <Duration ms={s.totalDuration} withHours={withHours} />
+                    <td className={TD_NUM}>
+                      <Hint
+                        content={
+                          <DurationBreakdownCard
+                            data={{
+                              kind: "session",
+                              totalMs: s.totalDuration,
+                              ttftSumMs: s.ttftSum,
+                              ttftCount: s.ttftCount,
+                              requests: g.requests.length,
+                            }}
+                          />
+                        }
+                        className="w-[200px]"
+                        align="end"
+                        openDelay={200}
+                      >
+                        <div className="flex w-full flex-col items-end leading-tight">
+                          <span className="text-[11.5px] text-muted-foreground">
+                            <Duration ms={s.totalDuration} withHours={withHours} />
+                          </span>
+                          <span className="text-[10px] text-muted-foreground">首 {fmtSeconds(s.ttft)}</span>
+                        </div>
+                      </Hint>
                     </td>
                     <td className={cn(TD, "text-center")}>
-                      <HitRatePill read={s.cacheRead} input={s.input} />
+                      <HitRatePill read={s.cacheRead} input={s.input} write={s.cacheCreate} />
                     </td>
                     <td className={TD_NUM}>
                       <div className="flex w-full flex-col items-end gap-1">
@@ -617,7 +753,6 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
                         <span className="text-[10px] text-muted-foreground">解 {fmtSpeed(s.decode)}</span>
                       </div>
                     </td>
-                    <td className={TD_NUM}>{fmtSeconds(s.ttft)}</td>
                     <td className={TD_NUM}>{fmtCostSplit(s.costUsd, s.costCny)}</td>
                   </tr>
 
@@ -655,15 +790,38 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
                             </span>
                           </td>
                           <td className={TD_NUM}>
-                            <div className="flex flex-col items-end gap-1">
-                              <span className="text-[11.5px]">
-                                <Duration ms={r.durationMs} withHours={withHours} />
-                              </span>
-                              <Waterfall durationMs={r.durationMs} ttftMs={r.timeToFirstTokenMs} maxMs={s.maxDuration} />
-                            </div>
+                            <Hint
+                              content={
+                                <DurationBreakdownCard
+                                  data={{
+                                    kind: "request",
+                                    durationMs: r.durationMs,
+                                    ttftMs: r.timeToFirstTokenMs,
+                                    maxMs: s.maxDuration,
+                                    status: r.status,
+                                  }}
+                                />
+                              }
+                              className="w-[200px]"
+                              align="end"
+                              openDelay={200}
+                            >
+                              <div className="flex w-full flex-col items-end leading-tight">
+                                <span className="text-[11.5px]">
+                                  <Duration ms={r.durationMs} withHours={withHours} />
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  首 {fmtSeconds(r.timeToFirstTokenMs)}
+                                </span>
+                              </div>
+                            </Hint>
                           </td>
                           <td className={cn(TD, "text-center")}>
-                            <HitRatePill read={r.cacheReadTokens} input={r.inputTokens} />
+                            <HitRatePill
+                              read={r.cacheReadTokens}
+                              input={r.inputTokens}
+                              write={r.cacheCreateTokens}
+                            />
                           </td>
                           {/* 组内请求与组头差 2 个数量级：同一绝对标尺下条长不足 1px，
                               改为只显示数值；跨会话的量级比较由组头的长条承担 */}
@@ -674,7 +832,6 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
                               <span className="text-[10px] text-muted-foreground">解 {fmtSpeed(r.decodeTokensPerSec)}</span>
                             </div>
                           </td>
-                          <td className={TD_NUM}>{fmtSeconds(r.timeToFirstTokenMs)}</td>
                           <td className={TD_NUM}>{fmtCostIn(r.cost, r.currency)}</td>
                         </tr>
                       );
@@ -686,7 +843,7 @@ export function RequestLog({ range, source }: { range: Range; source: SourceFilt
               groups.length === 0 &&
               Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  <td colSpan={9} className="px-2 py-2">
+                  <td colSpan={8} className="px-2 py-2">
                     <div className="h-4 w-full animate-pulse rounded bg-accent/60" />
                   </td>
                 </tr>

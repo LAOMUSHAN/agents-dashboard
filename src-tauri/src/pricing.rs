@@ -52,7 +52,99 @@ pub fn default_pricing() -> PricingMap {
     m.insert("glm-5.3".into(), zero(0.6, 2.2, 0.11));
     m.insert("kimi-k3".into(), zero(0.6, 2.5, 0.15));
     m.insert("x-preview-f-free".into(), zero(0.0, 0.0, 0.0));
+    for (id, entry) in claude_default_pricing() {
+        m.insert(id.to_string(), entry);
+    }
     m
+}
+
+/// Claude Code 的估算价（美元/百万 token）。
+///
+/// Opus 5.5 的四项价格来自本机 `cost-state.modelUsage` 的拟合：
+/// input 3.967 / output 19.995 / cache_read 0.2 / cache_write 7.986，
+/// 15 个会话的预测误差 MAE ≈ $0.14，基本就是 Claude 自己的计价口径。
+/// Sonnet / Fable / Haiku 没有足够的 cost-state 样本，按比例估算，可在设置页改。
+pub fn claude_default_pricing() -> Vec<(&'static str, PriceEntry)> {
+    let entry = |input: f64, output: f64, cache_read: f64, cache_write: f64| PriceEntry {
+        input,
+        output,
+        cache_read,
+        cache_write,
+        currency: None,
+        peak: None,
+        long_context: None,
+    };
+    vec![
+        ("claude-opus-5-5", entry(4.0, 20.0, 0.2, 8.0)),
+        ("claude-opus-5-5-high", entry(4.0, 20.0, 0.2, 8.0)),
+        ("claude-opus-4-8", entry(4.0, 20.0, 0.2, 8.0)),
+        ("claude-opus-4-5", entry(4.0, 20.0, 0.2, 8.0)),
+        ("claude-opus-4-1", entry(4.0, 20.0, 0.2, 8.0)),
+        ("claude-sonnet-5", entry(1.0, 5.0, 0.05, 2.0)),
+        ("claude-sonnet-4-5", entry(1.0, 5.0, 0.05, 2.0)),
+        ("claude-fable-5", entry(2.0, 10.0, 0.1, 4.0)),
+        ("claude-haiku-5-5", entry(0.8, 4.0, 0.04, 1.6)),
+        ("claude-haiku-4-5", entry(0.8, 4.0, 0.04, 1.6)),
+        ("claude-haiku-4-5-20251001", entry(0.8, 4.0, 0.04, 1.6)),
+    ]
+}
+
+/// 上一版（2026-11-03 首次接入）写入的估算价。只用于识别“这还是我们种下的默认值”，
+/// 不覆盖用户自己改过的价格。
+fn old_claude_default(id: &str) -> Option<(f64, f64, f64, f64)> {
+    match id {
+        "claude-opus-5-5" | "claude-opus-5-5-high" | "claude-opus-4-8"
+        | "claude-opus-4-5" | "claude-opus-4-1" => Some((15.0, 75.0, 1.5, 30.0)),
+        "claude-sonnet-5" | "claude-sonnet-4-5" => Some((3.0, 15.0, 0.3, 6.0)),
+        "claude-fable-5" => Some((5.0, 25.0, 0.5, 10.0)),
+        "claude-haiku-5-5" | "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => {
+            Some((1.0, 5.0, 0.1, 2.0))
+        }
+        _ => None,
+    }
+}
+
+fn price_matches(e: &PriceEntry, input: f64, output: f64, cache_read: f64, cache_write: f64) -> bool {
+    // 允许 0.30000000000000004 这类浮点落盘误差
+    (e.input - input).abs() < 1e-6
+        && (e.output - output).abs() < 1e-6
+        && (e.cache_read - cache_read).abs() < 1e-6
+        && (e.cache_write - cache_write).abs() < 1e-6
+}
+
+/// 已有 pricing.json 的一次性迁移：只补缺失、全 0 或仍是上一版默认值的 Claude 模型，
+/// 不动用户改过的价。用 seededSources 的版本标记，避免每次启动覆盖用户配置。
+pub fn ensure_claude_seeded(path: &Path) {
+    const SEED: &str = "claude-v2";
+    let mut cfg = load_uncached(path);
+    if cfg.seeded_sources.iter().any(|s| s == SEED) {
+        return;
+    }
+    for (id, price) in claude_default_pricing() {
+        let old = old_claude_default(id);
+        match cfg.models.get_mut(id) {
+            Some(existing)
+                if (existing.input == 0.0
+                    && existing.output == 0.0
+                    && existing.cache_read == 0.0
+                    && existing.cache_write == 0.0)
+                    || old
+                        .map(|(i, o, r, w)| price_matches(existing, i, o, r, w))
+                        .unwrap_or(false) =>
+            {
+                *existing = price;
+            }
+            Some(_) => {}
+            None => {
+                cfg.models.insert(id.to_string(), price);
+            }
+        }
+    }
+    if !cfg.seeded_sources.iter().any(|s| s == "claude") {
+        cfg.seeded_sources.push("claude".to_string());
+    }
+    cfg.seeded_sources.push(SEED.to_string());
+    let _ = save(path, &cfg);
 }
 
 pub fn default_config() -> PricingConfig {
@@ -405,5 +497,65 @@ mod tests {
         cfg.models.insert("cache-only".into(), entry(0.0, 0.0, 0.02));
         let (_, priced) = cfg.cost_row("cache-only", 0, 1_000_000, 0, 1_000_000, 0);
         assert!(priced);
+    }
+
+    /// 2026-11-03 首次接入时种下的 Opus 价是 15/75/1.5/30，Claude 自己的
+    /// cost-state 拟合结果是 4/20/0.2/8；迁移只替换“仍是旧默认值”的条目。
+    #[test]
+    fn migrates_old_claude_defaults_without_touching_custom() {
+        let p = std::env::temp_dir().join(format!(
+            "agents-dashboard-test-claude-seed-{}.json",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&p);
+        let mut cfg = default_config();
+        cfg.models.insert(
+            "claude-opus-5-5".into(),
+            PriceEntry {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 30.0,
+                currency: None,
+                peak: None,
+                long_context: None,
+            },
+        );
+        cfg.models.insert(
+            "claude-sonnet-5".into(),
+            PriceEntry {
+                input: 3.0,
+                output: 15.0,
+                cache_read: 0.30000000000000004,
+                cache_write: 6.0,
+                currency: None,
+                peak: None,
+                long_context: None,
+            },
+        );
+        cfg.models.insert(
+            "claude-haiku-5-5".into(),
+            PriceEntry {
+                input: 9.0,
+                output: 9.0,
+                cache_read: 9.0,
+                cache_write: 9.0,
+                currency: None,
+                peak: None,
+                long_context: None,
+            },
+        );
+        cfg.seeded_sources = vec!["claude".into()];
+        save(&p, &cfg).unwrap();
+
+        ensure_claude_seeded(&p);
+        let migrated = load(&p);
+        assert_eq!(migrated.models["claude-opus-5-5"].input, 4.0);
+        assert_eq!(migrated.models["claude-opus-5-5"].cache_write, 8.0);
+        assert_eq!(migrated.models["claude-sonnet-5"].input, 1.0);
+        // 用户自己改过的 9/9/9/9 保持不动
+        assert_eq!(migrated.models["claude-haiku-5-5"].input, 9.0);
+        assert!(migrated.seeded_sources.iter().any(|s| s == "claude-v2"));
+        let _ = std::fs::remove_file(&p);
     }
 }

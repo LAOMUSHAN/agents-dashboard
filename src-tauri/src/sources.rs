@@ -1,12 +1,12 @@
 //! 数据源范围与状态。
 //!
-//! 查询层把两个源（zcode / DSH）投影成一个带 `source` 列的查询面；
+//! 查询层把三个源（zcode / DSH / Claude Code）投影成一个带 `source` 列的查询面；
 //! 本模块只定义范围枚举、展示名和路径，不持有任何连接或后台任务。
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-/// 前端传来的数据源范围：全部 / 只看 zcode / 只看 DSH。
+/// 前端传来的数据源范围：全部 / 只看 zcode / 只看 DSH / 只看 Claude Code。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceFilter {
@@ -14,6 +14,7 @@ pub enum SourceFilter {
     All,
     Zcode,
     Dsh,
+    Claude,
 }
 
 impl SourceFilter {
@@ -24,6 +25,7 @@ impl SourceFilter {
             SourceFilter::All => true,
             SourceFilter::Zcode => id == SourceId::Zcode,
             SourceFilter::Dsh => id == SourceId::Dsh,
+            SourceFilter::Claude => id == SourceId::Claude,
         }
     }
 }
@@ -32,6 +34,7 @@ impl SourceFilter {
 pub enum SourceId {
     Zcode,
     Dsh,
+    Claude,
 }
 
 impl SourceId {
@@ -39,6 +42,7 @@ impl SourceId {
         match self {
             SourceId::Zcode => "zcode",
             SourceId::Dsh => "dsh",
+            SourceId::Claude => "claude",
         }
     }
 
@@ -46,6 +50,7 @@ impl SourceId {
         match self {
             SourceId::Zcode => "zcode",
             SourceId::Dsh => "DSH",
+            SourceId::Claude => "Claude",
         }
     }
 }
@@ -72,4 +77,8 @@ pub fn dsh_index_path(config_dir: &Path) -> PathBuf {
 
 pub fn dsh_sessions_root() -> PathBuf {
     crate::dsh::default_sessions_root()
+}
+
+pub fn claude_projects_root() -> PathBuf {
+    crate::claude::default_projects_root()
 }

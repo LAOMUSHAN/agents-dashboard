@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { RefreshCw, Sparkles } from "lucide-react";
 import type { ModelStat, ProviderStat, Summary } from "../../shared/types";
 import { fmtAmount, fmtCostSplit, fmtNumber, fmtPercent, fmtSpeed, fmtTokens } from "../format";
+import { sourceLabel } from "@/lib/source";
 import { StatBadge } from "./ui/stat-badge";
 import { cn } from "@/lib/utils";
 
@@ -22,19 +23,20 @@ export function InsightCard({
   const insights = useMemo<Insight[]>(() => {
     const list: Insight[] = [];
     if (!summary) return list;
-    const hit = summary.inputTokens > 0 ? summary.cacheReadTokens / summary.inputTokens : null;
+    const promptTotal = summary.inputTokens + summary.cacheCreateTokens;
+    const hit = promptTotal > 0 ? summary.cacheReadTokens / promptTotal : null;
 
-    // 两个源都有用量时，先交代构成，避免「全部」看起来像一个来源
+    // 多个源都有用量时，先交代构成，避免「全部」看起来像一个来源
     if (sourceTotals.length > 1) {
       const totalReq = sourceTotals.reduce((s, x) => s + x.requests, 0);
       const totalTok = sourceTotals.reduce((s, x) => s + x.tokens, 0);
       const parts = sourceTotals
         .map(
           (x) =>
-            `${x.id === "dsh" ? "DSH" : "zcode"} ${fmtPercent(x.requests, totalReq)} 请求 / ${fmtPercent(x.tokens, totalTok)} tokens`,
+            `${sourceLabel(x.id)} ${fmtPercent(x.requests, totalReq)} 请求 / ${fmtPercent(x.tokens, totalTok)} tokens`,
         )
         .join("，");
-      list.push({ text: `区间内两个数据源都有用量：${parts}。` });
+      list.push({ text: `区间内多个数据源都有用量：${parts}。` });
     }
 
     // 最活跃模型(按输出 tokens)
@@ -46,14 +48,14 @@ export function InsightCard({
     }
 
     // 缓存命中率提醒
-    if (hit != null && hit < 0.7 && summary.inputTokens > 0) {
+    if (hit != null && hit < 0.7 && promptTotal > 0) {
       list.push({
-        text: `缓存命中率 ${fmtPercent(summary.cacheReadTokens, summary.inputTokens)},低于 70%。命中可按约 1/10 价格计费,请检查提示词前缀是否稳定。`,
+        text: `缓存命中率 ${fmtPercent(summary.cacheReadTokens, promptTotal)},低于 70%。命中部分按缓存读价计费,请检查提示词前缀是否稳定。`,
         tone: "warn",
       });
     } else if (hit != null) {
       list.push({
-        text: `缓存命中率 ${fmtPercent(summary.cacheReadTokens, summary.inputTokens)},命中部分按缓存读价计费,重复上下文的请求成本大幅降低。`,
+        text: `缓存命中率 ${fmtPercent(summary.cacheReadTokens, promptTotal)},命中部分按缓存读价计费,重复上下文的请求成本大幅降低。`,
       });
     }
 

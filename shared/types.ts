@@ -49,6 +49,8 @@ export interface PricingConfig {
   /** 1 美元折合的人民币数(手工维护) */
   usdCnyRate: number;
   models: PricingMap;
+  /** 已做过一次性默认价迁移的数据源（如 "claude"） */
+  seededSources?: string[];
 }
 
 export interface Summary {
@@ -252,8 +254,8 @@ export interface RequestLogResponse {
   pageSize: number;
 }
 
-/** 数据源：zcode / DSH；"all" 是查询范围而不是一个源 */
-export type SourceId = "zcode" | "dsh";
+/** 数据源：zcode / DSH / Claude Code；"all" 是查询范围而不是一个源 */
+export type SourceId = "zcode" | "dsh" | "claude";
 export type SourceFilter = "all" | SourceId;
 
 /** 各数据源的可用性 / 新鲜度 */
@@ -261,7 +263,7 @@ export interface SourceStatus {
   id: SourceId;
   label: string;
   available: boolean;
-  /** DSH 索引最后更新时间(epoch ms)；zcode 是实时库，固定 0 */
+  /** 索引最后更新时间(epoch ms)；zcode 是实时库，固定 0 */
   indexedAt: number;
   error: string | null;
 }

@@ -1,20 +1,21 @@
-//! 统一查询层：把 zcode 库与 DSH 索引库投影成一个带 `source` 列的查询面。
+//! 统一查询层：把 zcode 库、DSH 索引库与 Claude Code 索引库投影成一个带 `source` 列的查询面。
 //!
 //! 每个查询连接：
-//! 1. 只读打开 `dsh-index.sqlite`；
+//! 1. 只读打开索引库；
 //! 2. `ATTACH` zcode 库（只读 URI；库不存在时 attach 一个空内存库，保证视图结构一致）；
 //! 3. 创建 `TEMP VIEW model_usage / session / tool_usage`，列名与旧表一致；
 //! 4. `PRAGMA query_only=ON`，查询连接不可能写任何库。
 //!
 //! 这样 `queries.rs` 里的 SQL 不用改表名，只多一个 `source` 列可用；
-//! 数据源范围（全部/zcode/DSH）在视图定义里过滤，查询函数无需关心。
+//! 数据源范围（全部/zcode/DSH/Claude）在视图定义里过滤，查询函数无需关心。
 
+use crate::claude;
 use crate::error::AppError;
 use crate::sources::SourceFilter;
 use rusqlite::Connection;
 use std::path::Path;
 
-/// 视图列顺序（两个分支必须完全一致）
+/// 视图列顺序（各分支必须完全一致）
 const MODEL_COLUMNS: &str = "source, id, session_id, model_id, provider_id, agent, status, \
      started_at, duration_ms, time_to_first_token_ms, input_tokens, output_tokens, \
      reasoning_tokens, cache_read_input_tokens, cache_creation_input_tokens, \
@@ -31,6 +32,11 @@ const DSH_MODEL: &str = "SELECT 'dsh', 'dsh:' || id, 'dsh:' || session_id, model
      input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, \
      cache_creation_input_tokens, retry_count, cancelled_by_user, context_exceeded, \
      error_type, error_code, error_message FROM dsh_model_usage";
+const CLAUDE_MODEL: &str = "SELECT 'claude', 'cc:' || id, 'cc:' || session_id, model_id, \
+     'cc:' || provider_id, agent, status, started_at, duration_ms, time_to_first_token_ms, \
+     input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, \
+     cache_creation_input_tokens, retry_count, cancelled_by_user, context_exceeded, \
+     error_type, error_code, error_message FROM claude_model_usage";
 
 // session 用 TEMP TABLE 而不是 VIEW：带命名空间前缀的 id 必须是真实列 + 索引，
 /// 否则 model_usage 与 session 的 join 用不上索引，7 万行会退化成几十秒。
@@ -38,9 +44,12 @@ const ZC_SESSION_INSERT: &str = "INSERT INTO session(source,id,parent_id,directo
      SELECT 'zcode', 'zc:' || id, 'zc:' || parent_id, directory, title, task_type FROM zc.session";
 const DSH_SESSION_INSERT: &str = "INSERT INTO session(source,id,parent_id,directory,title,task_type)
      SELECT 'dsh', 'dsh:' || id, 'dsh:' || parent_id, directory, title, task_type FROM dsh_session";
+const CLAUDE_SESSION_INSERT: &str = "INSERT INTO session(source,id,parent_id,directory,title,task_type)
+     SELECT 'claude', 'cc:' || id, 'cc:' || parent_id, directory, title, task_type FROM claude_session";
 
 const ZC_TOOL: &str = "SELECT 'zcode', tool_name, status, started_at, duration_ms FROM zc.tool_usage";
 const DSH_TOOL: &str = "SELECT 'dsh', tool_name, status, started_at, duration_ms FROM dsh_tool_usage";
+const CLAUDE_TOOL: &str = "SELECT 'claude', tool_name, status, started_at, duration_ms FROM claude_tool_usage";
 
 /// zcode 库不存在时用它顶上，让两个分支的视图结构保持一致（空表）。
 const EMPTY_ZCODE_SCHEMA: &str = "
@@ -69,6 +78,8 @@ pub fn open_query(
             index_path.display()
         ))
     })?;
+    // Claude 索引表由索引器建；这里兜底建表，保证没跑过索引时视图也能创建
+    claude::ensure_tables(&conn)?;
     attach_zcode(&conn, zcode_path)?;
 
     // session 物化成临时表（约 3 千行）：命名空间 id 作为真实主键，join 才走索引。
@@ -82,21 +93,23 @@ pub fn open_query(
     )
     .map_err(|e| AppError::Unavailable(format!("创建会话查询面失败: {e}")))?;
     match filter {
-        SourceFilter::All => {
-            conn.execute_batch(&format!("{ZC_SESSION_INSERT}; {DSH_SESSION_INSERT};"))
-        }
+        SourceFilter::All => conn.execute_batch(&format!(
+            "{ZC_SESSION_INSERT}; {DSH_SESSION_INSERT}; {CLAUDE_SESSION_INSERT};"
+        )),
         SourceFilter::Zcode => conn.execute_batch(ZC_SESSION_INSERT),
         SourceFilter::Dsh => conn.execute_batch(DSH_SESSION_INSERT),
+        SourceFilter::Claude => conn.execute_batch(CLAUDE_SESSION_INSERT),
     }
     .map_err(|e| AppError::Unavailable(format!("填充会话查询面失败: {e}")))?;
 
     let (model, tool) = match filter {
         SourceFilter::All => (
-            format!("{ZC_MODEL} UNION ALL {DSH_MODEL}"),
-            format!("{ZC_TOOL} UNION ALL {DSH_TOOL}"),
+            format!("{ZC_MODEL} UNION ALL {DSH_MODEL} UNION ALL {CLAUDE_MODEL}"),
+            format!("{ZC_TOOL} UNION ALL {DSH_TOOL} UNION ALL {CLAUDE_TOOL}"),
         ),
         SourceFilter::Zcode => (ZC_MODEL.to_string(), ZC_TOOL.to_string()),
         SourceFilter::Dsh => (DSH_MODEL.to_string(), DSH_TOOL.to_string()),
+        SourceFilter::Claude => (CLAUDE_MODEL.to_string(), CLAUDE_TOOL.to_string()),
     };
     conn.execute_batch(&format!(
         "CREATE TEMP VIEW model_usage({MODEL_COLUMNS}) AS {model};

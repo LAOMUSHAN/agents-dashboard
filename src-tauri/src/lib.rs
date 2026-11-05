@@ -1,3 +1,4 @@
+mod claude;
 mod db;
 mod dsh;
 mod error;
@@ -27,6 +28,8 @@ pub struct Inner {
     index_path: PathBuf,
     /// DSH 索引器；Mutex 保证同一时刻只有一个刷新在跑
     dsh: Mutex<dsh::DshIndexer>,
+    /// Claude Code 索引器；和 DSH 共用同一个可重建的索引库
+    claude: Mutex<claude::ClaudeIndexer>,
     /// 主窗口是否可见；隐藏到托盘时即使前端还有漏网的刷新，也不做索引扫描/写入
     visible: AtomicBool,
     pricing_path: PathBuf,
@@ -46,9 +49,10 @@ impl std::ops::Deref for AppState {
 
 impl AppState {
     /// 单源查询连接（旧的逐项命令用；主面板走 get_dashboard）。
-    /// 每次调用前补一次 DSH 增量；索引器内部有 10 秒节流，不会反复扫盘。
+    /// 每次调用前补一次 DSH/Claude 增量；索引器内部有 2 秒节流，不会反复扫盘。
     fn conn(&self) -> Result<rusqlite::Connection, String> {
         self.ensure_dsh(false);
+        self.ensure_claude(false);
         self.query_conn(SourceFilter::All).map_err(|e| e.to_string())
     }
 }
@@ -69,11 +73,29 @@ impl Inner {
         }
     }
 
+    /// Claude Code 索引器：同样只在查询时工作，隐藏到托盘时不读盘。
+    fn ensure_claude(&self, full: bool) -> claude::IndexStats {
+        let mut indexer = self.claude.lock().expect("claude index mutex poisoned");
+        if !self.visible.load(Ordering::Relaxed) {
+            return indexer
+                .stats()
+                .unwrap_or_else(|e| claude::IndexStats::error(e.to_string()));
+        }
+        match indexer.ensure_fresh(full) {
+            Ok(stats) => stats,
+            Err(e) => claude::IndexStats::error(e.to_string()),
+        }
+    }
+
     fn query_conn(&self, filter: SourceFilter) -> Result<rusqlite::Connection, AppError> {
         unified::open_query(&self.index_path, &self.zcode_path, filter)
     }
 
-    fn source_statuses(&self, dsh_stats: &dsh::IndexStats) -> Vec<SourceStatus> {
+    fn source_statuses(
+        &self,
+        dsh_stats: &dsh::IndexStats,
+        claude_stats: &claude::IndexStats,
+    ) -> Vec<SourceStatus> {
         vec![
             SourceStatus {
                 id: sources::SourceId::Zcode.as_str(),
@@ -89,10 +111,17 @@ impl Inner {
                 indexed_at: dsh_stats.indexed_at,
                 error: dsh_stats.last_error.clone(),
             },
+            SourceStatus {
+                id: sources::SourceId::Claude.as_str(),
+                label: sources::SourceId::Claude.label(),
+                available: claude_stats.available,
+                indexed_at: claude_stats.indexed_at,
+                error: claude_stats.last_error.clone(),
+            },
         ]
     }
 
-    /// 供应商展示名：两个源的 provider id 都加 source 前缀，
+    /// 供应商展示名：三个源的 provider id 都加 source 前缀，
     /// 避免同一个中转在聚合视图里被误合并。
     fn provider_names(&self) -> HashMap<String, String> {
         let mut names = HashMap::new();
@@ -102,6 +131,7 @@ impl Inner {
         for (id, name) in providers::load_dsh_provider_names() {
             names.insert(format!("dsh:{id}"), name);
         }
+        names.insert("cc:anthropic".to_string(), "Anthropic".to_string());
         names
     }
 
@@ -115,6 +145,7 @@ impl Inner {
         rate_window_sec: Option<i64>,
     ) -> Result<types::DashboardPayload, AppError> {
         let dsh_stats = self.ensure_dsh(false);
+        let claude_stats = self.ensure_claude(false);
         let p = &self.pricing_path;
         let names = self.provider_names();
         let rate_window = rate_window_sec.map(|s| s.clamp(1, 86_400));
@@ -181,17 +212,19 @@ impl Inner {
             activity,
             monthly_trend,
             token_rate,
-            sources: self.source_statuses(&dsh_stats),
-            capabilities: if filter.includes(sources::SourceId::Dsh) {
-                // DSH 日志没有 reasoning tokens / cache write 常为 0 / tool cancelled 不可辨
-                vec![
-                    "reasoningTokens".to_string(),
-                    "cacheCreateTokens".to_string(),
-                    "toolCancelled".to_string(),
-                    "decodeSpeed".to_string(),
-                ]
-            } else {
-                Vec::new()
+            sources: self.source_statuses(&dsh_stats, &claude_stats),
+            capabilities: {
+                let mut caps = Vec::new();
+                if filter.includes(sources::SourceId::Dsh) {
+                    // DSH 日志没有 reasoning tokens / cache write 常为 0 / tool cancelled 不可辨
+                    caps.extend([
+                        "reasoningTokens".to_string(),
+                        "cacheCreateTokens".to_string(),
+                        "toolCancelled".to_string(),
+                        "decodeSpeed".to_string(),
+                    ]);
+                }
+                caps
             },
         })
     }
@@ -425,6 +458,7 @@ fn save_pricing(state: tauri::State<AppState>, config: types::PricingConfig) -> 
                 )
             })
             .collect(),
+        seeded_sources: config.seeded_sources,
     };
     pricing::save(&state.pricing_path, &clean).map_err(|e| format!("保存失败:{e}"))?;
     Ok(clean)
@@ -463,6 +497,7 @@ struct Meta {
 #[tauri::command]
 fn get_meta(state: tauri::State<AppState>) -> Meta {
     let stats = state.ensure_dsh(false);
+    let claude_stats = state.ensure_claude(false);
     let (dsh_root, index_path) = state
         .dsh
         .lock()
@@ -477,7 +512,7 @@ fn get_meta(state: tauri::State<AppState>) -> Meta {
         zcode_path: state.zcode_path.display().to_string(),
         dsh_root,
         index_path,
-        sources: state.source_statuses(&stats),
+        sources: state.source_statuses(&stats, &claude_stats),
     }
 }
 
@@ -734,16 +769,22 @@ pub fn run() {
             std::fs::create_dir_all(&config_dir)?;
             let pricing_path = config_dir.join("pricing.json");
             pricing::ensure_migrated(&pricing_path);
+            pricing::ensure_claude_seeded(&pricing_path);
 
-            // 不在这里建索引：App 启动阶段不做 DSH 扫描；第一次查询时才补增量。
+            // 不在这里建索引：App 启动阶段不做扫描；第一次查询时才补增量。
             let zcode_path = sources::zcode_db_path();
             let index_path = sources::dsh_index_path(&config_dir);
             let dsh = dsh::DshIndexer::new(sources::dsh_sessions_root(), index_path.clone());
+            let claude = claude::ClaudeIndexer::new(
+                sources::claude_projects_root(),
+                index_path.clone(),
+            );
             app.manage(AppState {
                 inner: Arc::new(Inner {
                     zcode_path,
                     index_path,
                     dsh: Mutex::new(dsh),
+                    claude: Mutex::new(claude),
                     visible: AtomicBool::new(true),
                     pricing_path,
                 }),

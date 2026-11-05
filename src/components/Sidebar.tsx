@@ -153,14 +153,14 @@ export function Sidebar({
   }, [pillTop, pillReady]);
 
   const missing = status.sources.filter((s) => !s.available);
-  // 每个源各自的取数形态：zcode 直读实时库，DSH 走增量索引，索引时间就是新鲜度
+  // 每个源各自的取数形态：zcode 直读实时库，DSH/Claude 走增量索引，索引时间就是新鲜度
   const sourceLine =
     status.sources.length === 0
       ? "读取数据源…"
       : status.sources
           .map((s) => {
             if (!s.available) return `${s.label} 不可用`;
-            if (s.id === "dsh") {
+            if (s.id === "dsh" || s.id === "claude") {
               if (!s.indexedAt) return `${s.label} 就绪`;
               const stamp = isToday(s.indexedAt)
                 ? CLOCK_SHORT.format(s.indexedAt)

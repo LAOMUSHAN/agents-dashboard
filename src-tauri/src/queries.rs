@@ -310,7 +310,7 @@ pub fn get_token_rate(
     let mut stmt = conn.prepare(
         "SELECT mu.started_at,
                 COALESCE(mu.duration_ms, 0),
-                COALESCE(mu.time_to_first_token_ms, 0),
+                mu.time_to_first_token_ms,
                 COALESCE(mu.input_tokens, 0),
                 COALESCE(mu.output_tokens, 0),
                 COALESCE(mu.cache_read_input_tokens, 0),
@@ -325,7 +325,7 @@ pub fn get_token_rate(
         Ok((
             r.get::<_, i64>(0)?,
             r.get::<_, i64>(1)?,
-            r.get::<_, i64>(2)?,
+            r.get::<_, Option<i64>>(2)?,
             r.get::<_, i64>(3)?,
             r.get::<_, i64>(4)?,
             r.get::<_, i64>(5)?,
@@ -335,6 +335,7 @@ pub fn get_token_rate(
 
     let mut input_in = 0.0f64;
     let mut output_in = 0.0f64;
+    let mut decode_output_in = 0.0f64;
     let mut cache_read_in = 0.0f64;
     let mut busy_spans: Vec<(i64, i64)> = Vec::new();
     let mut busy_ms_total = 0i64;
@@ -343,7 +344,8 @@ pub fn get_token_rate(
     let mut requests = 0i64;
 
     for row in rows {
-        let (start, duration, ttft, input, output, cache_read, sid) = row?;
+        let (start, duration, ttft_opt, input, output, cache_read, sid) = row?;
+        let ttft = ttft_opt.unwrap_or(0);
         let end = start + duration;
         let decode_start = start + ttft;
         requests += 1;
@@ -358,10 +360,13 @@ pub fn get_token_rate(
         input_in += input as f64 * input_frac;
         cache_read_in += cache_read as f64 * input_frac;
 
-        // 输出：解码段；无解码段时按开始时刻的瞬时事件
-        if duration > ttft {
+        // 输出：有 TTFT 才摊到解码段；没有 TTFT 的请求只进总速度（忙碌并集），
+        // 不能把整段耗时当解码段，否则「解码速度」会退化成「总速度」。
+        if ttft > 0 && duration > ttft {
             let overlap = overlap_ms(decode_start, end, window_from, now);
-            output_in += output as f64 * overlap as f64 / (duration - ttft) as f64;
+            let frac = overlap as f64 / (duration - ttft) as f64;
+            output_in += output as f64 * frac;
+            decode_output_in += output as f64 * frac;
             decode_ms_total += overlap;
         } else if start >= window_from && start < now {
             output_in += output as f64;
@@ -420,7 +425,7 @@ pub fn get_token_rate(
             0.0
         },
         decode_tokens_per_sec: if decode_secs > 0.0 {
-            output_in / decode_secs
+            decode_output_in / decode_secs
         } else {
             0.0
         },
@@ -1305,19 +1310,20 @@ pub fn get_request_log(
         .map(|id| rusqlite::types::Value::from(id.clone()))
         .collect();
     let mut meta_stmt = conn.prepare(&format!(
-        "SELECT id, title, directory FROM session WHERE id IN ({root_ph})"
+        "SELECT id, title, directory, source FROM session WHERE id IN ({root_ph})"
     ))?;
-    let mut metas: HashMap<String, (Option<String>, String)> = HashMap::new();
+    let mut metas: HashMap<String, (Option<String>, String, String)> = HashMap::new();
     let mut meta_rows = meta_stmt.query_map(params_from_iter(meta_bind.iter()), |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, Option<String>>(1)?,
             r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
         ))
     })?;
     while let Some(row) = meta_rows.next() {
-        let (id, title, dir) = row?;
-        metas.insert(id, (title, dir));
+        let (id, title, dir, source) = row?;
+        metas.insert(id, (title, dir, source));
     }
 
     // 组内请求按时间升序;WHERE 占位符顺序:先 IN(root_ids) 后范围条件
@@ -1365,12 +1371,12 @@ pub fn get_request_log(
     let mut groups: Vec<RequestGroup> = root_ids
         .iter()
         .map(|id| {
-            let (title, dir) = metas
+            let (title, dir, source) = metas
                 .get(id)
                 .cloned()
-                .unwrap_or_else(|| (None, String::new()));
+                .unwrap_or_else(|| (None, String::new(), String::new()));
             RequestGroup {
-                source: id.split(':').next().unwrap_or("").to_string(),
+                source,
                 session_id: id.clone(),
                 title,
                 project: base_name(&dir),

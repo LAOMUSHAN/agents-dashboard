@@ -73,19 +73,29 @@ export function SummaryCards({
   trend?: TrendPoint[];
   /** 聚合范围下不完整的指标（如 DSH 不提供 reasoning tokens） */
   capabilities?: string[];
-  /** 当前数据源范围；用于把「仅 zcode」与「DSH 未提供」说清楚 */
-  source?: "all" | "zcode" | "dsh";
+  /** 当前数据源范围；用于把「仅 zcode」与「部分来源未提供」说清楚 */
+  source?: "all" | "zcode" | "dsh" | "claude";
 }) {
   const [more, setMore] = useState(false);
   const partialReasoning = capabilities.includes("reasoningTokens");
   const partialCacheWrite = capabilities.includes("cacheCreateTokens");
   const partialDecode = capabilities.includes("decodeSpeed");
-  const partialNote = source === "dsh" ? "（DSH 未提供）" : "（仅 zcode）";
+  const partialNote =
+    source === "dsh"
+      ? "（DSH 未提供）"
+      : source === "claude"
+        ? "（Claude 未提供）"
+        : source === "all"
+          ? "（部分来源未提供）"
+          : "（仅 zcode）";
 
   const series = {
     tokens: trend.map((p) => p.inputTokens + p.outputTokens),
     cost: trend.map((p) => p.cost),
-    hit: trend.map((p) => (p.inputTokens > 0 ? p.cacheReadTokens / p.inputTokens : 0)),
+    hit: trend.map((p) => {
+      const total = p.inputTokens + p.cacheCreateTokens;
+      return total > 0 ? p.cacheReadTokens / total : 0;
+    }),
     decode: trend.map((p) => p.decodeTokensPerSec ?? 0),
     cacheRead: trend.map((p) => p.cacheReadTokens),
     input: trend.map((p) => p.inputTokens),
@@ -112,8 +122,12 @@ export function SummaryCards({
         },
         {
           label: "缓存命中率",
-          value: fmtHitRate(summary.cacheReadTokens, summary.inputTokens),
-          hint: "缓存读 ÷ 总输入",
+          value: fmtHitRate(
+            summary.cacheReadTokens,
+            summary.inputTokens,
+            summary.cacheCreateTokens,
+          ),
+          hint: "缓存读 ÷ 总 prompt（含缓存写）",
           series: series.hit,
           mode: "pp",
           avg: true,
