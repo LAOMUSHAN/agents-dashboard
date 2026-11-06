@@ -481,6 +481,24 @@ pub struct MonthPoint {
     pub cost: f64,
 }
 
+/// 单个来源对实时总速度的贡献。
+///
+/// 分子是该来源在窗口内摊分到的输出，分母是**全体来源**的忙碌墙钟并集——
+/// 这样各来源分项之和恒等于总速度（并行时不会重复计算墙钟）。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRate {
+    pub source: String,
+    pub output_tokens: i64,
+    pub input_tokens: i64,
+    /// 其中缓存读（输入的子集，不叠加）
+    pub cache_read_tokens: i64,
+    /// 对总速度的贡献（tok/s）；分项之和 = `TokenRate::active_tokens_per_sec`
+    pub tokens_per_sec: f64,
+    pub requests: i64,
+    pub sessions: i64,
+}
+
 /// 实时 Token 速度：最近 `window_sec` 秒内，已完成调用的输出按「解码段与窗口的重叠
 /// 比例」摊分，再除以窗口内有调用在跑的墙钟并集。窗口长度等于前端设定的刷新间隔。
 #[derive(Debug, Serialize)]
@@ -512,6 +530,9 @@ pub struct TokenRate {
     /// 窗口内完成的调用数 / 其中的会话数
     pub requests: i64,
     pub sessions: i64,
+    /// 按来源拆分的贡献；顺序固定为 zcode → DSH → Claude。
+    /// 没有调用的来源不会出现（前端按数据源范围补 0）。
+    pub by_source: Vec<SourceRate>,
 }
 
 /// 仪表盘一次性返回的全部数据：一次 IPC、一个数据库快照，

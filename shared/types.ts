@@ -269,6 +269,24 @@ export interface SourceStatus {
 }
 
 /**
+ * 单个来源对实时总速度的贡献。
+ *
+ * 分子是该来源在窗口内摊分到的输出，分母是**全体来源**的忙碌墙钟并集；
+ * 因此各来源分项之和恒等于总速度（并行时不会重复计算墙钟）。
+ */
+export interface SourceRate {
+  source: string;
+  outputTokens: number;
+  inputTokens: number;
+  /** 其中缓存读（输入的子集，不叠加） */
+  cacheReadTokens: number;
+  /** 对总速度的贡献（tok/s）；分项之和 = TokenRate.activeTokensPerSec */
+  tokensPerSec: number;
+  requests: number;
+  sessions: number;
+}
+
+/**
  * 实时 Token 速度：最近 windowSec 秒内，已完成调用的输出按「解码段与窗口的重叠比例」
  * 摊分，再除以窗口内有调用在跑的墙钟并集。窗口长度等于界面上的刷新间隔。
  */
@@ -297,6 +315,8 @@ export interface TokenRate {
   /** 窗口内完成的调用数 / 其中的会话数 */
   requests: number;
   sessions: number;
+  /** 按来源拆分的贡献；顺序固定为 zcode → DSH → Claude，无调用的来源不出现 */
+  bySource: SourceRate[];
 }
 
 /** 一次刷新返回的全部面板数据(后端 get_dashboard 合并命令,同一数据库快照) */

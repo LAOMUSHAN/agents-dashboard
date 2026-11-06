@@ -1,11 +1,19 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { TokenRate } from "../../shared/types";
-import { fmtNumber, fmtTimestamp } from "../format";
-import { Hint, HintText } from "./ui/hint";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { SourceFilter, SourceStatus, TokenRate } from "../../shared/types";
+import { fmtTimestamp, fmtTokens } from "../format";
+import { Hint } from "./ui/hint";
 import { cn } from "@/lib/utils";
 
 const PATH_SCALE = 1000;
 const CLOSE_DURATION_MS = 120; // 数据到达后补满最后一小段至 100% 的闭环时长
+
+/** 弹窗里的来源顺序与颜色：zcode 灰 / DSH 蓝 / Claude 陶土，与来源徽标保持一致 */
+const SOURCE_ORDER = ["zcode", "dsh", "claude"] as const;
+const SOURCE_META: Record<string, { label: string; color: string }> = {
+  zcode: { label: "zcode", color: "var(--cds-text-muted)" },
+  dsh: { label: "DSH", color: "var(--cds-dsh)" },
+  claude: { label: "Claude", color: "var(--cds-clay)" },
+};
 
 /**
  * 顶栏实时 Token 速度（总速度口径）+ 描边倒计时进度环。
@@ -42,6 +50,8 @@ const CLOSE_DURATION_MS = 120; // 数据到达后补满最后一小段至 100% �
 export function TokenRateBadge({
   rate,
   windowSec,
+  scope = "all",
+  sources = [],
   dataUpdatedAt,
   isFetching,
   pending,
@@ -49,6 +59,10 @@ export function TokenRateBadge({
   rate: TokenRate | null;
   /** 采样窗口（秒）= 当前刷新间隔 */
   windowSec: number;
+  /** 当前数据源范围：决定弹窗里列出哪些来源 */
+  scope?: SourceFilter;
+  /** 各来源可用性；未接入的来源显示「未接入」而不是 0 */
+  sources?: SourceStatus[];
   /** 最近一次数据成功刷新的时间戳（epoch ms） */
   dataUpdatedAt?: number;
   /** 当前是否有请求正在执行 */
@@ -72,6 +86,31 @@ export function TokenRateBadge({
   const value = displayRate ? fmtSpeed(displayRate.activeTokensPerSec) : pending ? "…" : "—";
   const activeSecs = (displayRate?.activeMs ?? 0) / 1000;
   const intervalMs = Math.max(1, windowSec) * 1000;
+  const stateLabel = pending ? "等待数据" : isFetching ? "采样中" : active ? "活跃" : "空闲";
+
+  // 弹窗按当前数据源范围列出所有来源：没有调用的来源补 0，未接入的显示「未接入」。
+  // 顺序固定为 zcode → DSH → Claude，与顶部数据源切换器一致。
+  const sourceRows = useMemo(() => {
+    const ids = scope === "all" ? SOURCE_ORDER : [scope];
+    const rates = new Map((displayRate?.bySource ?? []).map((s) => [s.source, s]));
+    const statuses = new Map(sources.map((s) => [s.id, s]));
+    return ids.map((id) => {
+      const row = rates.get(id);
+      const status = statuses.get(id);
+      return {
+        id,
+        label: status?.label ?? SOURCE_META[id]?.label ?? id,
+        color: SOURCE_META[id]?.color ?? "var(--cds-text-muted)",
+        available: status?.available ?? true,
+        contribution: row?.tokensPerSec ?? 0,
+      };
+    });
+  }, [displayRate, scope, sources]);
+
+  // 分项分母用分项之和（= 总速度）；用它算占比，堆叠条永远正好铺满
+  const compositionTotal = sourceRows.reduce((sum, s) => sum + s.contribution, 0);
+  // 只选一个来源时没有横向比较的必要，来源卡改成一行，避免右侧大片留白
+  const singleSource = sourceRows.length === 1;
 
   const trackRef = useRef<HTMLDivElement>(null);
   const countdownRef = useRef<HTMLSpanElement>(null);
@@ -236,60 +275,208 @@ export function TokenRateBadge({
   const d = buildTopMidPillPath(size.w, size.h, 1);
 
   return (
+    // 大卡片用不透明底：HintCard 默认的半透明 + 毛玻璃会让底下的图表文字透出来
     <Hint
-      className="w-[318px]"
+      className="w-[356px] bg-popover p-4"
       content={
-        <div>
-          <HintText title="实时 Token 速度">
-            最近 <span className="font-medium text-foreground">{windowSec} 秒</span>
-            内完成调用的输出，按解码段摊分后 ÷ 有调用在跑的墙钟时间（含预填充）；
-            多会话并行时叠加，没人跑就是 0。
-          </HintText>
+        <div className="text-popover-foreground">
+          {/* 标题行：名称 + 采样状态 */}
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] font-medium tracking-[0.06em] text-muted-foreground">
+              实时 Token 速度
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span
+                className={cn(
+                  "size-[5px] rounded-full",
+                  active ? "bg-[var(--cds-clay)]" : "bg-muted-foreground/40",
+                  isFetching && "animate-pulse",
+                )}
+              />
+              {stateLabel}
+            </span>
+          </div>
+
+          {/* 主数字 + 窗口摘要 */}
+          <div className="mt-2.5 flex items-end justify-between gap-3">
+            <div className="flex items-baseline gap-1.5">
+              <span
+                className={cn(
+                  "text-[32px] leading-[0.9] font-medium tracking-[-0.03em] tabular-nums",
+                  active ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {value}
+              </span>
+              <span className="text-[10px] text-muted-foreground">tok/s</span>
+            </div>
+            {displayRate && (
+              <div className="pb-0.5 text-right text-[10px] leading-[1.5] text-muted-foreground">
+                <div>最近 {windowSec} 秒</div>
+                <div>
+                  {displayRate.requests} 请求 · {displayRate.sessions} 会话
+                </div>
+              </div>
+            )}
+          </div>
 
           {displayRate ? (
             <>
-              <div className="mt-2.5 space-y-1 border-t border-border/60 pt-2">
-                <RateRow
-                  label="总速度"
-                  value={`${fmtSpeed(displayRate.activeTokensPerSec)} tok/s`}
-                />
-                <RateRow
-                  label="解码速度"
-                  value={`${fmtSpeed(displayRate.decodeTokensPerSec)} tok/s`}
-                />
-                <RateRow
-                  label="并发"
-                  value={`${displayRate.concurrency.toFixed(2)}× · 忙碌 ${activeSecs.toFixed(1)}s`}
-                />
-                <RateRow label="输出" value={`${fmtNumber(displayRate.outputTokens)} tokens`} />
-                <RateRow
-                  label="输入"
-                  value={`${fmtNumber(displayRate.inputTokens)}（缓存读 ${fmtNumber(displayRate.cacheReadTokens)}）`}
-                />
-                <RateRow
-                  label="完成"
-                  value={`${displayRate.requests} 个请求 · ${displayRate.sessions} 个会话`}
-                />
-                <RateRow label="采样" value={fmtTimestamp(displayRate.sampledAt)} />
-                <RateRow label="下次刷新" value={`${windowSec}.0s`} valueRef={countdownRef} />
-              </div>
-              <div
-                aria-hidden
-                className="mt-1 h-[2px] w-full overflow-hidden rounded-full bg-border/50"
-              >
+              {/* 来源构成：一条堆叠比例条 + 三列等宽来源卡（填满横向空间） */}
+              <div className="mt-3.5">
+                <div className="flex h-[8px] gap-[2px] overflow-hidden rounded-full bg-[var(--cds-segmented-track)]">
+                  {sourceRows.map((s) => {
+                    const share = compositionTotal > 0 ? s.contribution / compositionTotal : 0;
+                    if (share <= 0) return null;
+                    return (
+                      <span
+                        key={s.id}
+                        className="h-full rounded-full transition-[width] duration-500 ease-out"
+                        style={{
+                          width: `${share * 100}%`,
+                          minWidth: 2,
+                          background: s.color,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+
                 <div
-                  ref={barRef}
-                  className="h-full rounded-full bg-[var(--cds-clay)]/70"
-                  style={{ width: "0%" }}
+                  className="mt-2 grid overflow-hidden rounded-lg border border-border/50"
+                  style={{
+                    gridTemplateColumns: `repeat(${sourceRows.length}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {sourceRows.map((s, i) => {
+                    const share = compositionTotal > 0 ? s.contribution / compositionTotal : 0;
+                    const idle = s.contribution <= 0;
+                    const valueText = s.available
+                      ? s.contribution > 0
+                        ? fmtSpeed(s.contribution)
+                        : "0.0"
+                      : "—";
+                    const shareText = s.available
+                      ? share > 0
+                        ? `${(share * 100).toFixed(1)}%`
+                        : "—"
+                      : "未接入";
+                    const dot = (
+                      <span
+                        aria-hidden
+                        className="size-[6px] shrink-0 rounded-full"
+                        style={{
+                          background: idle ? "transparent" : s.color,
+                          boxShadow: idle ? `inset 0 0 0 1px ${s.color}` : undefined,
+                        }}
+                      />
+                    );
+                    const label = (
+                      <span
+                        className={cn(
+                          "truncate text-[11px] leading-none",
+                          idle ? "text-muted-foreground" : "text-foreground/90",
+                        )}
+                      >
+                        {s.label}
+                      </span>
+                    );
+                    return (
+                      <div
+                        key={s.id}
+                        className={cn("min-w-0 px-2.5 py-2", i > 0 && "border-l border-border/50")}
+                      >
+                        {singleSource ? (
+                          <div className="flex items-center gap-2">
+                            {dot}
+                            {label}
+                            <span
+                              className={cn(
+                                "ml-auto text-[16px] leading-none font-medium tabular-nums",
+                                idle ? "text-muted-foreground" : "text-foreground",
+                              )}
+                            >
+                              {valueText}
+                            </span>
+                            <span className="w-10 text-right text-[10px] leading-none tabular-nums text-muted-foreground">
+                              {shareText}
+                            </span>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-1.5">
+                              {dot}
+                              {label}
+                            </div>
+                            <div
+                              className={cn(
+                                "mt-1.5 text-[16px] leading-none font-medium tabular-nums",
+                                idle ? "text-muted-foreground" : "text-foreground",
+                              )}
+                            >
+                              {valueText}
+                            </div>
+                            <div className="mt-1 text-[10px] leading-none tabular-nums text-muted-foreground">
+                              {shareText}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 辅助指标：一条四列数据带，比 2×2 大格更紧凑 */}
+              <div className="mt-3 grid grid-cols-4 divide-x divide-border/50 overflow-hidden rounded-lg border border-border/50">
+                <StatCell
+                  label="解码速度"
+                  value={fmtSpeed(displayRate.decodeTokensPerSec)}
+                  unit="tok/s"
+                />
+                <StatCell
+                  label="并发"
+                  value={`${displayRate.concurrency.toFixed(2)}×`}
+                  sub={`忙碌 ${activeSecs.toFixed(1)}s`}
+                />
+                <StatCell label="输出" value={fmtTokens(displayRate.outputTokens)} unit="tokens" />
+                <StatCell
+                  label="输入"
+                  value={fmtTokens(displayRate.inputTokens)}
+                  sub={`缓存 ${fmtTokens(displayRate.cacheReadTokens)}`}
                 />
               </div>
-              <p className="mt-2 border-t border-border/60 pt-2 text-[10.5px] leading-relaxed text-muted-foreground">
-                总速度 = 输出 ÷ 忙碌墙钟，与总览「总速度」同口径；解码速度 = 输出 ÷
-                解码时长（DSH 底栏同口径）；并发 = Σ耗时 ÷ 忙碌并集。输入不计入主数字。
+
+              {/* 刷新进度与采样信息 */}
+              <div className="mt-3 border-t border-border/50 pt-2">
+                <div className="flex items-baseline justify-between text-[11px] text-muted-foreground">
+                  <span>下次刷新</span>
+                  <span ref={countdownRef} className="tabular-nums text-popover-foreground">
+                    {windowSec}.0s
+                  </span>
+                </div>
+                <div
+                  aria-hidden
+                  className="mt-1 h-[2px] w-full overflow-hidden rounded-full bg-border/50"
+                >
+                  <div
+                    ref={barRef}
+                    className="h-full rounded-full bg-[var(--cds-clay)]/70"
+                    style={{ width: "0%" }}
+                  />
+                </div>
+                <div className="mt-1.5 flex items-baseline justify-between text-[10px] text-muted-foreground/80">
+                  <span>采样 {fmtTimestamp(displayRate.sampledAt)}</span>
+                  <span>窗口 {windowSec}s</span>
+                </div>
+              </div>
+
+              <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground/80">
+                分项 = 来源输出 ÷ 全体忙碌并集；合计 = 总速度，输入不计入。
               </p>
             </>
           ) : (
-            <p className="mt-2 text-[10.5px] leading-relaxed text-muted-foreground">
+            <p className="mt-2.5 text-[10px] leading-relaxed text-muted-foreground">
               等待第一份快照。
             </p>
           )}
@@ -372,21 +559,27 @@ function buildTopMidPillPath(w: number, h: number, stroke: number): string {
 /** 速率：纯数字 + 1 位小数（4 位整数 + 小数点 + 1 位，正好 5 个数字位；不带千分位逗号） */
 const fmtSpeed = (n: number) => n.toFixed(1);
 
-function RateRow({
+function StatCell({
   label,
   value,
-  valueRef,
+  unit,
+  sub,
 }: {
   label: string;
   value: string;
-  valueRef?: React.RefObject<HTMLSpanElement>;
+  unit?: string;
+  sub?: string;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 text-[11px]">
-      <span className="text-muted-foreground">{label}</span>
-      <span ref={valueRef} className="tabular-nums text-popover-foreground">
-        {value}
-      </span>
+    <div className="min-w-0 px-1.5 py-2">
+      <div className="text-[11px] leading-none text-muted-foreground">{label}</div>
+      <div className="mt-1 flex items-baseline gap-0.5 whitespace-nowrap">
+        <span className="text-[12px] leading-none font-medium tabular-nums text-popover-foreground">
+          {value}
+        </span>
+        {unit && <span className="text-[10px] leading-none text-muted-foreground">{unit}</span>}
+      </div>
+      {sub && <div className="mt-0.5 truncate text-[10px] leading-none text-muted-foreground/70">{sub}</div>}
     </div>
   );
 }

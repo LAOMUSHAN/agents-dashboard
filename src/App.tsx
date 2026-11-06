@@ -374,6 +374,8 @@ export default function App() {
           <TokenRateBadge
             rate={payload?.tokenRate ?? null}
             windowSec={refreshSec}
+            scope={committedSource}
+            sources={sources}
             dataUpdatedAt={dashboard.dataUpdatedAt}
             isFetching={dashboard.isFetching}
             pending={dashboard.isPending}

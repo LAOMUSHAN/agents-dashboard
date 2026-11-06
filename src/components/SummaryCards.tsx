@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { Summary, TrendPoint } from "../../shared/types";
-import { fmtCostSplit, fmtHitRate, fmtSpeed, fmtTokens } from "../format";
+import { fmtCostSplitAdaptive, fmtHitRate, fmtSpeed, fmtTokens } from "../format";
 import { Delta, Sparkline } from "./ui/data-viz";
 import { cn } from "@/lib/utils";
 
@@ -114,7 +114,7 @@ export function SummaryCards({
         },
         {
           label: "估算费用",
-          value: fmtCostSplit(summary.costUsd, summary.costCny),
+          value: fmtCostSplitAdaptive(summary.costUsd, summary.costCny),
           hint: summary.unpricedModels.length > 0 ? `${summary.unpricedModels.length} 个模型未配置单价` : "逐请求计价 · 含峰谷",
           warn: summary.unpricedModels.length > 0,
           series: series.cost,

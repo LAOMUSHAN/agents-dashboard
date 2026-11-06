@@ -1,7 +1,7 @@
 use crate::pricing;
 use crate::types::*;
 use rusqlite::{params, params_from_iter, Connection};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // model_usage 一行 = 一次模型调用;子代理会话通过 parent_id 挂到父会话的项目上
 const FROM_CLAUSE: &str = "
@@ -314,7 +314,8 @@ pub fn get_token_rate(
                 COALESCE(mu.input_tokens, 0),
                 COALESCE(mu.output_tokens, 0),
                 COALESCE(mu.cache_read_input_tokens, 0),
-                mu.session_id
+                mu.session_id,
+                mu.source
            FROM model_usage mu
           WHERE mu.status = 'completed'
             AND mu.started_at < ?1
@@ -330,8 +331,19 @@ pub fn get_token_rate(
             r.get::<_, i64>(4)?,
             r.get::<_, i64>(5)?,
             r.get::<_, String>(6)?,
+            r.get::<_, String>(7)?,
         ))
     })?;
+
+    /// 单个来源的窗口内累计；分母统一用全体忙碌并集，分项才能加总成总速度
+    #[derive(Default)]
+    struct SourceAcc {
+        input_in: f64,
+        output_in: f64,
+        cache_read_in: f64,
+        requests: i64,
+        sessions: HashSet<String>,
+    }
 
     let mut input_in = 0.0f64;
     let mut output_in = 0.0f64;
@@ -340,16 +352,21 @@ pub fn get_token_rate(
     let mut busy_spans: Vec<(i64, i64)> = Vec::new();
     let mut busy_ms_total = 0i64;
     let mut decode_ms_total = 0i64;
-    let mut sessions = std::collections::HashSet::new();
+    let mut sessions = HashSet::new();
     let mut requests = 0i64;
+    let mut by_source: HashMap<String, SourceAcc> = HashMap::new();
 
     for row in rows {
-        let (start, duration, ttft_opt, input, output, cache_read, sid) = row?;
+        let (start, duration, ttft_opt, input, output, cache_read, sid, source) = row?;
         let ttft = ttft_opt.unwrap_or(0);
         let end = start + duration;
         let decode_start = start + ttft;
         requests += 1;
-        sessions.insert(sid);
+        sessions.insert(sid.clone());
+
+        let acc = by_source.entry(source).or_default();
+        acc.requests += 1;
+        acc.sessions.insert(sid);
 
         // 输入：预填充段；无 TTFT 时按开始时刻的瞬时事件（只作参考，不进主数字）
         let input_frac = if ttft <= 0 || ttft >= duration {
@@ -357,19 +374,26 @@ pub fn get_token_rate(
         } else {
             overlap_ms(start, start + ttft, window_from, now) as f64 / ttft as f64
         };
-        input_in += input as f64 * input_frac;
-        cache_read_in += cache_read as f64 * input_frac;
+        let row_input_in = input as f64 * input_frac;
+        input_in += row_input_in;
+        acc.input_in += row_input_in;
+        let row_cache_read_in = cache_read as f64 * input_frac;
+        cache_read_in += row_cache_read_in;
+        acc.cache_read_in += row_cache_read_in;
 
         // 输出：有 TTFT 才摊到解码段；没有 TTFT 的请求只进总速度（忙碌并集），
         // 不能把整段耗时当解码段，否则「解码速度」会退化成「总速度」。
         if ttft > 0 && duration > ttft {
             let overlap = overlap_ms(decode_start, end, window_from, now);
             let frac = overlap as f64 / (duration - ttft) as f64;
-            output_in += output as f64 * frac;
-            decode_output_in += output as f64 * frac;
+            let row_output_in = output as f64 * frac;
+            output_in += row_output_in;
+            acc.output_in += row_output_in;
+            decode_output_in += row_output_in;
             decode_ms_total += overlap;
         } else if start >= window_from && start < now {
             output_in += output as f64;
+            acc.output_in += output as f64;
         }
 
         // 忙碌区间：整次调用与窗口的交集（含预填充），总速度的分母
@@ -408,6 +432,31 @@ pub fn get_token_rate(
     let secs = window_sec as f64;
     let active_secs = active_ms as f64 / 1000.0;
     let decode_secs = decode_ms_total as f64 / 1000.0;
+
+    // 分项贡献的分母刻意用全体忙碌并集，而不是各来源自己的忙碌时长：
+    // 两个来源同时跑时各自算自己的并集会重复计算墙钟，分项之和就会大于总速度。
+    let mut by_source: Vec<SourceRate> = by_source
+        .into_iter()
+        .map(|(source, acc)| SourceRate {
+            source,
+            output_tokens: acc.output_in.round() as i64,
+            input_tokens: acc.input_in.round() as i64,
+            cache_read_tokens: acc.cache_read_in.round() as i64,
+            tokens_per_sec: if active_secs > 0.0 {
+                acc.output_in / active_secs
+            } else {
+                0.0
+            },
+            requests: acc.requests,
+            sessions: acc.sessions.len() as i64,
+        })
+        .collect();
+    by_source.sort_by(|a, b| {
+        source_rank(&a.source)
+            .cmp(&source_rank(&b.source))
+            .then_with(|| a.source.cmp(&b.source))
+    });
+
     Ok(TokenRate {
         window_sec,
         window_from,
@@ -436,7 +485,18 @@ pub fn get_token_rate(
         },
         requests,
         sessions: sessions.len() as i64,
+        by_source,
     })
+}
+
+/// 来源固定展示顺序：zcode → DSH → Claude → 其他（按名称）
+fn source_rank(source: &str) -> u8 {
+    match source {
+        "zcode" => 0,
+        "dsh" => 1,
+        "claude" => 2,
+        _ => 3,
+    }
 }
 
 /// 半开区间的重叠毫秒数：`max(0, min(b, hi) - max(a, lo))`
@@ -1790,21 +1850,21 @@ mod tests {
             "CREATE TABLE model_usage(
                 session_id TEXT, status TEXT, started_at INTEGER, duration_ms INTEGER,
                 time_to_first_token_ms INTEGER, input_tokens INTEGER, output_tokens INTEGER,
-                cache_read_input_tokens INTEGER
+                cache_read_input_tokens INTEGER, source TEXT
             );
             INSERT INTO model_usage VALUES
                 -- 完成于 11000：落在窗口 (5000,15000] 内
-                ('s1','completed',1000,10000,2000,1000,500,300),
+                ('s1','completed',1000,10000,2000,1000,500,300,'zcode'),
                 -- 无耗时：完成时刻 = 开始时刻 12000
-                ('s2','completed',12000,0,0,100,0,0),
+                ('s2','completed',12000,0,0,100,0,0,'zcode'),
                 -- 完成于 21000：窗口右侧之外
-                ('s3','completed',20000,1000,500,999,999,0),
+                ('s3','completed',20000,1000,500,999,999,0,'dsh'),
                 -- 完成于 3000：窗口左侧之外（早已结束）
-                ('s4','completed',0,3000,1000,777,777,0),
+                ('s4','completed',0,3000,1000,777,777,0,'claude'),
                 -- 完成于 8000：窗口内
-                ('s5','completed',4000,4000,2000,1000,800,700),
+                ('s5','completed',4000,4000,2000,1000,800,700,'dsh'),
                 -- 非 completed 不参与
-                ('s6','error',13000,0,0,500,500,0);",
+                ('s6','error',13000,0,0,500,500,0,'zcode');",
         )
         .unwrap();
 
@@ -1829,6 +1889,28 @@ mod tests {
         // 总速度 = 1175 ÷ 6s；解码速度 = 1175 ÷ 8s
         assert!((rate.active_tokens_per_sec - 1175.0 / 6.0).abs() < 1e-9);
         assert!((rate.decode_tokens_per_sec - 1175.0 / 8.0).abs() < 1e-9);
+
+        // 按来源拆分：zcode 只有 s1+s2，dsh 只有 s5；claude 的 s4 在窗口外不出现。
+        // 分项分母用全体忙碌并集（6s），所以分项之和必须等于总速度。
+        assert_eq!(rate.by_source.len(), 2);
+        let zc = &rate.by_source[0];
+        assert_eq!(zc.source, "zcode");
+        assert_eq!(zc.output_tokens, 375);
+        assert_eq!(zc.input_tokens, 100);
+        assert_eq!(zc.cache_read_tokens, 0);
+        assert_eq!(zc.requests, 2);
+        assert_eq!(zc.sessions, 2);
+        assert!((zc.tokens_per_sec - 375.0 / 6.0).abs() < 1e-9);
+        let dsh = &rate.by_source[1];
+        assert_eq!(dsh.source, "dsh");
+        assert_eq!(dsh.output_tokens, 800);
+        assert_eq!(dsh.input_tokens, 500);
+        assert_eq!(dsh.cache_read_tokens, 350);
+        assert_eq!(dsh.requests, 1);
+        assert_eq!(dsh.sessions, 1);
+        assert!((dsh.tokens_per_sec - 800.0 / 6.0).abs() < 1e-9);
+        let sum: f64 = rate.by_source.iter().map(|s| s.tokens_per_sec).sum();
+        assert!((sum - rate.active_tokens_per_sec).abs() < 1e-9);
     }
 
     /// 空窗口返回 0 而不是 NULL；窗口长度越界时被夹到合法区间
@@ -1839,7 +1921,7 @@ mod tests {
             "CREATE TABLE model_usage(
                 session_id TEXT, status TEXT, started_at INTEGER, duration_ms INTEGER,
                 time_to_first_token_ms INTEGER, input_tokens INTEGER, output_tokens INTEGER,
-                cache_read_input_tokens INTEGER
+                cache_read_input_tokens INTEGER, source TEXT
             );",
         )
         .unwrap();
@@ -1857,6 +1939,7 @@ mod tests {
         assert_eq!(rate.active_tokens_per_sec, 0.0);
         assert_eq!(rate.decode_tokens_per_sec, 0.0);
         assert_eq!(rate.concurrency, 0.0);
+        assert!(rate.by_source.is_empty());
     }
 
     /// 直连真实库冒烟:model_usage.id 是 TEXT,行映射类型写错会在这里暴露

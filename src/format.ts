@@ -73,6 +73,36 @@ export function fmtCostSplit(usd: number | null | undefined, cny: number | null 
   return `¥${amount(c)} · $${amount(u)}`;
 }
 
+/** 整数位数（0.xx 的 0 也算一位） */
+function integerDigits(v: number): number {
+  return Math.max(1, Math.trunc(Math.abs(v)).toString().length);
+}
+
+/**
+ * 估算费用 KPI 专用：按两个币种「整数位 + 2 位小数」的总位数控制显示宽度。
+ * ≤9 位保留 2 位小数；10–11 位降到 1 位；≥12 位不带小数。
+ * 这样正常金额保持分位精度，金额变大时优先牺牲小数位而不是让值折行。
+ * 分以下的金额仍走原 4 位小数，避免被抹成 0。
+ */
+export function fmtCostSplitAdaptive(
+  usd: number | null | undefined,
+  cny: number | null | undefined,
+): string {
+  const u = usd ?? 0;
+  const c = cny ?? 0;
+  const tiny = (v: number) => v !== 0 && Math.abs(v) < 0.01;
+  if (tiny(u) || tiny(c)) return fmtCostSplit(u, c);
+
+  const parts: { symbol: string; value: number }[] = [];
+  if (c !== 0) parts.push({ symbol: "¥", value: c });
+  if (u !== 0) parts.push({ symbol: "$", value: u });
+  if (parts.length === 0) return "$0.00";
+
+  const rawDigits = parts.reduce((sum, p) => sum + integerDigits(p.value) + 2, 0);
+  const decimals = rawDigits <= 9 ? 2 : rawDigits <= 11 ? 1 : 0;
+  return parts.map((p) => `${p.symbol}${p.value.toFixed(decimals)}`).join(" · ");
+}
+
 /** 占比:part/total,total 为 0 时返回 "-" */
 export function fmtPercent(part: number, total: number): string {
   if (!total) return "-";
