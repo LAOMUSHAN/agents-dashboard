@@ -3,11 +3,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { HeatCell, SourceFilter } from "../shared/types";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { api } from "./api";
-import { setUsdCnyRate } from "./format";
+import { fmtDuration, fmtNumber, fmtTokensCompact, setUsdCnyRate } from "./format";
 import { ActivityHeatmap } from "./components/ActivityHeatmap";
 import { AgentStatsPanel } from "./components/AgentStatsPanel";
 import { ContextComposition } from "./components/ContextComposition";
-import { DateRangePicker, useRange } from "./components/DateRangePicker";
+import { useRange } from "./components/DateRangePicker";
 import { Dropdown, type DropdownOption } from "./components/Dropdown";
 import { ErrorPanel } from "./components/ErrorPanel";
 import { InsightCard } from "./components/InsightCard";
@@ -19,7 +19,6 @@ import { ProviderTable } from "./components/ProviderTable";
 import { ProviderTrendChart } from "./components/ProviderTrendChart";
 import { RequestLog } from "./components/RequestLog";
 import { Sidebar, type SidebarGroup } from "./components/Sidebar";
-import { SourceScope } from "./components/SourceScope";
 import { SummaryCards } from "./components/SummaryCards";
 import { TitleBar } from "./components/TitleBar";
 import { TitleHintProvider } from "./components/ui/title-hint";
@@ -323,6 +322,36 @@ export default function App() {
     setThemeModeState(mode);
   };
 
+  // 侧栏数据源行尾：各来源在区间内的总 Token。后端按未筛选口径返回，
+  // 切到单一来源后其余来源的数字仍然真实，可以直接横向比较
+  const sourceTokens = useMemo<Record<string, number> | null>(() => {
+    if (!payload) return null;
+    const map: Record<string, number> = {};
+    for (const t of payload.sourceTotals ?? []) {
+      map[t.source] = t.inputTokens + t.outputTokens;
+    }
+    return map;
+  }, [payload]);
+
+  // 侧栏行尾指标：每页在当前范围下的一个主数值，口径与页面内一致
+  const navMetrics = useMemo<Record<string, string | null>>(() => {
+    const tokens = (summary?.inputTokens ?? 0) + (summary?.outputTokens ?? 0);
+    const modelCount = new Set(models.map((m) => m.modelId)).size;
+    const latencyRows = latency.filter((l) => l.requests > 0 && l.avgMs != null);
+    const latencyRequests = latencyRows.reduce((sum, l) => sum + l.requests, 0);
+    // 总体平均延迟 = 各模型平均值按请求数加权，不能拿各模型 P95 再平均
+    const avgLatency =
+      latencyRequests > 0
+        ? latencyRows.reduce((sum, l) => sum + (l.avgMs as number) * l.requests, 0) / latencyRequests
+        : null;
+    return {
+      overview: tokens > 0 ? `${fmtTokensCompact(tokens)} tok` : null,
+      breakdown: modelCount > 0 ? `${modelCount} 模型` : null,
+      log: summary && summary.requests > 0 ? `${fmtNumber(summary.requests)} 条` : null,
+      health: avgLatency != null ? `平均 ${fmtDuration(avgLatency)}` : null,
+    };
+  }, [summary, models, latency]);
+
   const navGroups: SidebarGroup[] = NAV_GROUPS.map((group) => ({
     id: group.id,
     label: group.label,
@@ -330,6 +359,7 @@ export default function App() {
       value: item.value,
       label: item.label,
       icon: item.icon,
+      metric: navMetrics[item.value] ?? null,
       // 导航只表达「有错误信号」；具体数量留在健康页，避免行尾挂一个会被误读的累计数
       alert: item.value === "health" ? (errors?.error ?? 0) > 0 : false,
       alertHint: item.value === "health" ? "区间内有错误请求，打开查看明细" : undefined,
@@ -354,6 +384,10 @@ export default function App() {
         collapsed={navCollapsed}
         onToggleCollapsed={toggleNav}
         version={__APP_VERSION__}
+        scope={source}
+        onScopeChange={setSourceScope}
+        range={rangeState}
+        sourceTokens={sourceTokens}
         status={{
           scopeLabel: scopeLabel(source),
           sources,
@@ -380,10 +414,6 @@ export default function App() {
             isFetching={dashboard.isFetching}
             pending={dashboard.isPending}
           />
-          {tab !== "settings" && (
-            <SourceScope value={source} onChange={setSourceScope} sources={sources} />
-          )}
-          <DateRangePicker {...rangeState} />
           <Dropdown
             value={refreshSec}
             options={REFRESH_DROPDOWN_OPTIONS}

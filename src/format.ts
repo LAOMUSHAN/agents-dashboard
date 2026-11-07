@@ -11,6 +11,16 @@ export function fmtNumber(n: number | null | undefined): string {
   return (n ?? 0).toLocaleString("zh-CN");
 }
 
+/** 侧栏行尾用的紧凑 Token 数：2.4M / 812k / 1.2B，整数部分够长时省掉小数 */
+export function fmtTokensCompact(n: number | null | undefined): string {
+  const v = n ?? 0;
+  const abs = Math.abs(v);
+  if (abs >= 1e9) return (v / 1e9).toFixed(abs >= 1e10 ? 0 : 1) + "B";
+  if (abs >= 1e6) return (v / 1e6).toFixed(abs >= 1e7 ? 0 : 1) + "M";
+  if (abs >= 1e3) return (v / 1e3).toFixed(abs >= 1e4 ? 0 : 1) + "k";
+  return String(Math.round(v));
+}
+
 /**
  * 汇率配置:后端所有金额一律以美元计算与存储,这里只保留汇率本身。
  * 展示币种不再有全局开关——每个费用单元格按**该行价格表条目的币种**显示

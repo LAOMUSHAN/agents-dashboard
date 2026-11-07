@@ -25,8 +25,10 @@ type DropdownProps<T extends string | number> = {
   icon?: ComponentType<{ size?: number | string }>;
   /** 附加区域:渲染在选项列表下方,点击不会收起菜单;函数形式可拿到 close 主动收起 */
   extra?: ReactNode | ((api: { close: () => void }) => ReactNode);
-  /** 菜单向上展开(控件位于界面底部时用) */
-  dropUp?: boolean;
+  /** 触发器外观:pill=顶栏胶囊;field=侧栏整宽字段 */
+  variant?: "pill" | "field";
+  /** 菜单展开方向:right 从触发器右侧飞出(侧栏底部,日历比侧栏宽) */
+  menuPlacement?: "below" | "above" | "right";
   title?: string;
 };
 
@@ -37,7 +39,8 @@ export function Dropdown<T extends string | number>({
   onChange,
   icon: LeadIcon,
   extra,
-  dropUp,
+  variant = "pill",
+  menuPlacement = "below",
   title,
 }: DropdownProps<T>) {
   const [open, setOpen] = useState(false);
@@ -89,23 +92,37 @@ export function Dropdown<T extends string | number>({
     <div className="relative" ref={rootRef}>
       <button
         type="button"
-        className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className={cn(
+          "inline-flex items-center text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground",
+          variant === "field"
+            ? "h-[30px] w-full gap-2 rounded-lg border border-border px-2.5 hover:border-[var(--cds-border-strong)]"
+            : "h-7 gap-1.5 rounded-lg px-2 hover:bg-accent",
+        )}
         title={title}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onKeyDown}
       >
-        {LeadIcon && <LeadIcon size={13} />}
-        <span>{selected?.label}</span>
-        <ChevronDown size={13} className="opacity-70 transition-transform" style={{ transform: open ? "rotate(180deg)" : undefined }} />
+        {LeadIcon && <LeadIcon size={variant === "field" ? 14 : 13} />}
+        <span className={variant === "field" ? "min-w-0 flex-1 truncate text-left" : undefined}>
+          {selected?.label}
+        </span>
+        <ChevronDown
+          size={13}
+          className={cn("shrink-0 opacity-70 transition-transform", variant === "field" && "ml-auto")}
+          style={{ transform: open ? "rotate(180deg)" : undefined }}
+        />
       </button>
       {open && (
         <div
-          className={
-            "cds-pop absolute right-0 z-50 min-w-36 rounded-panel bg-popover p-1 shadow-popover " +
-            (dropUp ? "bottom-full mb-1 origin-bottom" : "mt-1 origin-top")
-          }
+          className={cn(
+            "absolute z-50 rounded-panel bg-popover p-1 shadow-popover",
+            variant === "field" ? "min-w-44" : "min-w-36",
+            menuPlacement === "above" && "cds-pop bottom-full mb-1 origin-bottom",
+            menuPlacement === "below" && "cds-pop right-0 mt-1 origin-top",
+            menuPlacement === "right" && "cds-pop-side bottom-0 left-full ml-2 origin-left",
+          )}
         >
           <div role="listbox">
             {options.map((o, i) => (

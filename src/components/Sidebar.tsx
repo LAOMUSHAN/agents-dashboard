@@ -1,27 +1,33 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
-import type { SourceStatus } from "../../shared/types";
+import type { SourceFilter, SourceStatus } from "../../shared/types";
 import brandMark from "@/assets/brand-mark.svg";
 import { toggleMaximize } from "@/lib/window";
 import { cn } from "@/lib/utils";
+import { fmtTokensCompact } from "@/format";
+import { DateRangePicker, useRange } from "./DateRangePicker";
 
 /**
  * 侧边栏（统一外壳 + CDS 桌面架构）
  *
  * 全高左列，与右侧内容列共用同一块底色：侧栏不再是「另一块面板」，
  * 结构只由一条两端淡出的发丝线和留白给出，顶行与内容列同为 44px。
- * 自上而下三段：身份区（应用名 + 版本 + 收起）、分组导航、运行状态。
+ * 自上而下三段：身份区（应用名 + 版本 + 收起）、分组导航、范围与运行状态。
  *
- * 三条取舍：
- * - 选中态是块在条目间滑动的共享滑块（transform + 15 阶弹簧），不靠边框；
- * - 导航条目无边框，靠行高节奏、Hover 微差与滑块区分（CDS 单边框法则）；
- * - 2.0 高密工作台：30px 行高、16px 图标、12.5px 标签，分组标签走 10.5px caption。
- * - 「健康与性能」行尾只留一个低干扰状态点；错误数量在页面内看，导航不挂计数。
+ * 排版取舍：
+ * - 导航行 34px，行尾右对齐该页主指标（Token / 模型数 / 请求数 / 平均延迟），
+ *   与表格「标识左、量值右」同一套对齐规则；收起时不显示指标。
+ * - 选中态是整行淡带 + 贴在侧栏左缘的 2px 陶土条，条随选中项滑动。
+ * - 分组标题与「数据源」标题用一条向右淡出的发丝线补足横向结构。
+ * - 数据源从顶栏搬进来竖排四行：状态点 + 名称 + 新鲜度（实时 / 索引时间），
+ *   脚注只留刷新节奏、时钟与版本，不再重复来源状态。
  */
 export type SidebarItem = {
   value: string;
   label: string;
   icon: LucideIcon;
+  /** 行尾指标：该页在当前范围下的主数值，已格式化 */
+  metric?: string | null;
   /** 行尾注意点：只表达「有信号」，具体数字留在页面内 */
   alert?: boolean;
   /** 悬停注意点时的说明 */
@@ -84,6 +90,10 @@ export function Sidebar({
   onToggleCollapsed,
   version,
   status,
+  scope,
+  onScopeChange,
+  range,
+  sourceTokens,
 }: {
   groups: SidebarGroup[];
   active: string;
@@ -92,11 +102,16 @@ export function Sidebar({
   onToggleCollapsed: () => void;
   version: string;
   status: SidebarStatus;
+  scope: SourceFilter;
+  onScopeChange: (value: SourceFilter) => void;
+  range: ReturnType<typeof useRange>;
+  /** sourceId -> 区间内 input+output token；数据未到齐时为 null */
+  sourceTokens: Record<string, number> | null;
 }) {
   const navRef = useRef<HTMLElement>(null);
-  // 共享滑块：只记纵坐标，宽度/高度交给 CSS 变量跟随侧栏宽度
-  const [pillTop, setPillTop] = useState<number | null>(null);
-  const [pillReady, setPillReady] = useState(false);
+  // 选中条只记纵坐标，横坐标固定在侧栏左缘
+  const [barTop, setBarTop] = useState<number | null>(null);
+  const [barReady, setBarReady] = useState(false);
 
   // 垂直 tablist 的 roving focus：方向键在条目间移动，Home/End 跳到首尾
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -124,19 +139,19 @@ export function Sidebar({
     nodes[next]?.focus();
   };
 
-  // 滑块落位：读选中条目的矩形，换算成 nav 内容坐标（含滚动量）
+  // 选中条落位：读选中条目的矩形，换算成 nav 内容坐标（含滚动量），再居中到行高
   useLayoutEffect(() => {
     const nav = navRef.current;
     if (!nav) return;
     const measure = () => {
       const selected = nav.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
       if (!selected) {
-        setPillTop(null);
+        setBarTop(null);
         return;
       }
       const navRect = nav.getBoundingClientRect();
       const itemRect = selected.getBoundingClientRect();
-      setPillTop(itemRect.top - navRect.top + nav.scrollTop);
+      setBarTop(itemRect.top - navRect.top + nav.scrollTop + (itemRect.height - 18) / 2);
     };
     measure();
     // 侧栏宽度动画、窗口缩放都会改变条目矩形；ResizeObserver 逐帧跟随
@@ -145,12 +160,12 @@ export function Sidebar({
     return () => observer.disconnect();
   }, [active, collapsed]);
 
-  // 首帧先把滑块放到位置，再开启过渡，避免启动时从顶部滑下来
+  // 首帧先把选中条放到位置，再开启过渡，避免启动时从顶部滑下来
   useLayoutEffect(() => {
-    if (pillTop == null || pillReady) return;
-    const frame = requestAnimationFrame(() => setPillReady(true));
+    if (barTop == null || barReady) return;
+    const frame = requestAnimationFrame(() => setBarReady(true));
     return () => cancelAnimationFrame(frame);
-  }, [pillTop, pillReady]);
+  }, [barTop, barReady]);
 
   const missing = status.sources.filter((s) => !s.available);
   // 每个源各自的取数形态：zcode 直读实时库，DSH/Claude 走增量索引，索引时间就是新鲜度
@@ -185,11 +200,29 @@ export function Sidebar({
     .join(" · ");
   const statusTitle = `${status.scopeLabel}\n${sourceLine}\nv${version} · ${clockLine}`;
 
+  // 数据源竖排：全部 + 各来源；行尾是区间内的总 Token，来源新鲜度留在脚注 tooltip 里
+  const totalTokens = sourceTokens
+    ? Object.values(sourceTokens).reduce((sum, n) => sum + n, 0)
+    : null;
+  const scopeRows: Array<{ id: SourceFilter; label: string; meta: string; warn?: boolean }> = [
+    {
+      id: "all",
+      label: "全部",
+      meta: totalTokens == null ? "" : fmtTokensCompact(totalTokens),
+    },
+    ...status.sources.map((s) => ({
+      id: s.id as SourceFilter,
+      label: s.label,
+      meta: sourceTokens ? fmtTokensCompact(sourceTokens[s.id] ?? 0) : "",
+      warn: !s.available,
+    })),
+  ];
+
   return (
     <aside
       data-collapsed={collapsed ? "true" : "false"}
       className={cn(
-        "relative flex shrink-0 flex-col overflow-hidden bg-background",
+        "relative flex shrink-0 flex-col bg-background",
         "transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]",
         collapsed ? "w-14" : "w-[200px]",
       )}
@@ -262,7 +295,7 @@ export function Sidebar({
         )}
       </div>
 
-      {/* 分组导航：滑块在条目底下滑动，条目本身保持透明 */}
+      {/* 分组导航：选中条贴在左缘滑动，条目本身只留淡带 */}
       <nav
         ref={navRef}
         data-collapsed={collapsed ? "true" : "false"}
@@ -274,11 +307,11 @@ export function Sidebar({
       >
         <span
           aria-hidden
-          className="nav-glider"
+          className="nav-bar"
           style={{
-            transform: `translateY(${pillTop ?? 0}px)`,
-            opacity: pillTop == null ? 0 : 1,
-            ...(pillReady ? {} : { transition: "none" }),
+            transform: `translateY(${barTop ?? 0}px)`,
+            opacity: barTop == null ? 0 : 1,
+            ...(barReady ? {} : { transition: "none" }),
           }}
         />
 
@@ -287,8 +320,9 @@ export function Sidebar({
             {collapsed ? (
               gi > 0 && <div className="mx-auto mb-1.5 h-px w-5 bg-border/70" aria-hidden />
             ) : (
-              <div className="px-2 pb-1 pt-1 text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground">
-                {group.label}
+              <div className="flex items-center gap-2 px-1 pb-1.5 pt-1.5 text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground">
+                <span>{group.label}</span>
+                <span className="nav-rule" aria-hidden />
               </div>
             )}
             <div className={cn("space-y-0.5", collapsed && "flex flex-col items-center")}>
@@ -303,21 +337,25 @@ export function Sidebar({
                     tabIndex={selected ? 0 : -1}
                     title={
                       collapsed
-                        ? item.alert && item.alertHint
-                          ? `${item.label} · ${item.alertHint}`
-                          : item.label
+                        ? [
+                            item.label,
+                            item.metric,
+                            item.alert ? item.alertHint : null,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")
                         : undefined
                     }
                     aria-label={collapsed ? item.label : undefined}
                     onClick={() => onSelect(item.value)}
                     className={cn(
                       "group/item relative z-10 flex items-center overflow-hidden rounded-lg text-left text-[12.5px]",
-                      "transition-[background-color,color,height,transform] duration-150 active:scale-[0.985]",
+                      "transition-[background-color,color,height] duration-150 active:scale-[0.99]",
                       collapsed
-                        ? "h-[var(--nav-item-h)] w-[var(--nav-item-h)] gap-2 px-2"
+                        ? "h-[var(--nav-item-h)] w-[var(--nav-item-h)] justify-center px-0"
                         : "h-[var(--nav-item-h)] w-full gap-2 px-2",
                       selected
-                        ? "font-medium text-foreground"
+                        ? "bg-[var(--cds-nav-pill)] font-medium text-foreground"
                         : "text-muted-foreground hover:bg-[var(--cds-nav-pill-hover)] hover:text-foreground",
                     )}
                   >
@@ -332,11 +370,21 @@ export function Sidebar({
                       )}
                     />
                     <span className="nav-label min-w-0 flex-1 truncate">{item.label}</span>
+                    {!collapsed && item.metric && (
+                      <span
+                        className={cn(
+                          "ml-auto shrink-0 font-mono text-[9.5px] tabular-nums transition-colors",
+                          selected ? "text-muted-foreground" : "text-muted-foreground/55",
+                        )}
+                      >
+                        {item.metric}
+                      </span>
+                    )}
                     {item.alert && !collapsed && (
                       <span
                         title={item.alertHint}
                         aria-label={item.alertHint}
-                        className="ml-1 flex size-4 shrink-0 items-center justify-center"
+                        className="ml-1 flex size-3.5 shrink-0 items-center justify-center"
                       >
                         <span className="size-1.5 rounded-full bg-danger/80" aria-hidden />
                       </span>
@@ -355,7 +403,7 @@ export function Sidebar({
         ))}
       </nav>
 
-      {/* 运行状态：压缩成两行，不再用卡片包住；整块悬停可看完整状态 */}
+      {/* 范围与运行状态：数据源竖排 + 时间范围 + 脚注，收起时只留状态点 */}
       <div className={cn("shrink-0", collapsed ? "flex justify-center px-3 pb-3" : "px-2 pb-2")}>
         {collapsed ? (
           <div
@@ -367,28 +415,71 @@ export function Sidebar({
           </div>
         ) : (
           <>
-            <div className="footer-hairline mb-1 h-px" aria-hidden />
+            <div className="flex items-center gap-2 px-1 pb-1 pt-2 text-[10.5px] font-medium tracking-[0.08em] text-muted-foreground">
+              <span>数据源</span>
+              <span className="nav-rule" aria-hidden />
+              <span className="shrink-0 pr-1 font-mono text-[9.5px] font-normal tracking-[0.04em] text-muted-foreground/60">
+                TOKEN
+              </span>
+            </div>
+            <div className="space-y-0.5">
+              {scopeRows.map((row) => {
+                const on = scope === row.id;
+                return (
+                  <button
+                    key={row.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => onScopeChange(row.id)}
+                    className={cn(
+                      "flex h-[26px] w-full items-center gap-2 rounded-md px-2 text-left text-[12px] transition-colors",
+                      on
+                        ? "text-foreground"
+                        : "text-muted-foreground hover:bg-[var(--cds-alpha-1)] hover:text-foreground",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "size-1.5 shrink-0 rounded-full",
+                        on
+                          ? "bg-clay"
+                          : row.warn
+                            ? "border border-warn"
+                            : "border border-muted-foreground/40",
+                      )}
+                      aria-hidden
+                    />
+                    <span className="min-w-0 truncate">{row.label}</span>
+                    {row.meta && (
+                      <span
+                        className={cn(
+                          "ml-auto shrink-0 font-mono text-[9.5px] tabular-nums",
+                          on ? "text-muted-foreground" : "text-muted-foreground/60",
+                        )}
+                      >
+                        {row.meta}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-1.5">
+              <DateRangePicker {...range} variant="field" menuPlacement="right" />
+            </div>
+            <div className="footer-hairline mt-2.5 h-px" aria-hidden />
             <div
               title={statusTitle}
-              className="rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--cds-alpha-1)]"
+              className="mt-1.5 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[10px] text-muted-foreground"
             >
-              <div className="flex items-center gap-1.5">
-                <span className={cn("size-1.5 shrink-0 rounded-full", dotTone)} aria-hidden />
-                <span className="truncate text-[11px] font-medium text-foreground">
-                  {status.scopeLabel}
-                </span>
-                <span className="ml-auto shrink-0 font-mono text-[9.5px] text-muted-foreground/70">
-                  v{version}
-                </span>
-              </div>
-              <div
-                className={cn(
-                  "mt-0.5 truncate text-[10.5px]",
-                  missing.length > 0 ? "text-warn" : "text-muted-foreground",
-                )}
-              >
-                {sourceLine}
-              </div>
+              <span className={cn("size-1.5 shrink-0 rounded-full", dotTone)} aria-hidden />
+              <span className="truncate">
+                每 {status.refreshSec} 秒
+                {status.updatedAt ? ` · ${CLOCK.format(status.updatedAt)}` : ""}
+              </span>
+              <span className="ml-auto shrink-0 font-mono text-[9.5px] text-muted-foreground/70">
+                v{version}
+              </span>
             </div>
           </>
         )}

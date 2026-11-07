@@ -151,15 +151,17 @@ impl Inner {
         let rate_window = rate_window_sec.map(|s| s.clamp(1, 86_400));
         // 窗口终点与面板查询同一时刻，避免速度指标比面板早/晚一个刷新周期
         let rate_now = queries::now_ms();
-        let mut conns = Vec::with_capacity(14);
+        let mut conns = Vec::with_capacity(15);
         for _ in 0..14 {
             conns.push(self.query_conn(filter)?);
         }
+        // 侧栏要横向比较各来源，这一条必须走未筛选的连接
+        conns.push(self.query_conn(SourceFilter::All)?);
         // 每条查询独占一个连接：Connection 不是 Sync，必须 move 进各自线程
-        let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13] =
-            <[rusqlite::Connection; 14]>::try_from(conns).expect("连接数固定为 14");
+        let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14] =
+            <[rusqlite::Connection; 15]>::try_from(conns).expect("连接数固定为 15");
 
-        let (summary, trend, model_trend, provider_trend, models, projects, providers, tools, agents, errors, latency, activity, monthly_trend, token_rate) =
+        let (summary, trend, model_trend, provider_trend, models, projects, providers, tools, agents, errors, latency, activity, monthly_trend, token_rate, source_totals) =
             std::thread::scope(|s| -> Result<_, AppError> {
                 let summary = s.spawn(move || queries::get_summary(&c0, range, p));
                 let trend = s.spawn(move || queries::get_trend(&c1, range, p));
@@ -178,6 +180,7 @@ impl Inner {
                     Some(w) => queries::get_token_rate(&c13, w, rate_now).map(Some),
                     None => Ok(None),
                 });
+                let source_totals = s.spawn(move || queries::get_source_totals(&c14, range));
 
                 Ok((
                     join_query("summary", summary.join())?,
@@ -194,6 +197,7 @@ impl Inner {
                     join_query("activity", activity.join())?,
                     join_query("monthly_trend", monthly_trend.join())?,
                     join_query("token_rate", token_rate.join())?,
+                    join_query("source_totals", source_totals.join())?,
                 ))
             })?;
 
@@ -212,6 +216,7 @@ impl Inner {
             activity,
             monthly_trend,
             token_rate,
+            source_totals,
             sources: self.source_statuses(&dsh_stats, &claude_stats),
             capabilities: {
                 let mut caps = Vec::new();

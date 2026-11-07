@@ -535,6 +535,17 @@ pub struct TokenRate {
     pub by_source: Vec<SourceRate>,
 }
 
+/// 单个来源在区间内的总量。**不受当前来源筛选影响**：侧栏用它横向比较各来源，
+/// 切到单一来源时其余来源的数字仍然真实。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceTotal {
+    pub source: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub requests: i64,
+}
+
 /// 仪表盘一次性返回的全部数据：一次 IPC、一个数据库快照，
 /// 避免 13 个命令各查一遍导致同一屏里的数字来自不同时刻。
 #[derive(Debug, Serialize)]
@@ -555,6 +566,8 @@ pub struct DashboardPayload {
     pub monthly_trend: Vec<MonthPoint>,
     /// 各数据源的可用性 / 新鲜度；某个源不可用时前端置灰并提示
     pub sources: Vec<SourceStatus>,
+    /// 各来源在区间内的 Token 总量（不受筛选影响，供侧栏比较）
+    pub source_totals: Vec<SourceTotal>,
     /// 聚合范围下不完整的指标（如 DSH 不提供 reasoning tokens）；
     /// 前端据此显示「仅 zcode」而不是把 0 当总数
     pub capabilities: Vec<String>,

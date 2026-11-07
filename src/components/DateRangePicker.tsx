@@ -300,7 +300,14 @@ function RangeCalendar({ from, to, onPick, onClear, onDone }: RangeCalendarProps
   );
 }
 
-export function DateRangePicker(props: ReturnType<typeof useRange>) {
+export function DateRangePicker({
+  variant,
+  menuPlacement,
+  ...props
+}: ReturnType<typeof useRange> & {
+  variant?: "pill" | "field";
+  menuPlacement?: "below" | "above" | "right";
+}) {
   const { preset, setPreset, customFrom, customTo, setCustom } = props;
 
   // 自定义范围时触发器/选项显示紧凑的 MM-DD 区间,未选完则用省略号占位
@@ -322,6 +329,8 @@ export function DateRangePicker(props: ReturnType<typeof useRange>) {
       onChange={setPreset}
       icon={CalendarRange}
       title="时间范围"
+      variant={variant}
+      menuPlacement={menuPlacement}
       extra={({ close }) =>
         preset === "custom" ? (
           <RangeCalendar

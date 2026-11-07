@@ -945,6 +945,32 @@ pub fn get_model_stats(conn: &Connection, range: &Range, pricing_path: &std::pat
         .collect())
 }
 
+/// 各来源在区间内的 Token 总量；侧栏用它横向比较，因此调用方必须传**未筛选**的连接
+pub fn get_source_totals(conn: &Connection, range: &Range) -> rusqlite::Result<Vec<SourceTotal>> {
+    let (where_sql, params) = build_where(range);
+    query_rows(
+        conn,
+        &format!(
+            "SELECT mu.source AS source,
+                    SUM(mu.input_tokens) AS inputTokens,
+                    SUM(mu.output_tokens) AS outputTokens,
+                    COUNT(*) AS requests
+             {FROM_CLAUSE} {where_sql}
+             GROUP BY mu.source
+             ORDER BY requests DESC"
+        ),
+        &params,
+        |r| {
+            Ok(SourceTotal {
+                source: r.get(0)?,
+                input_tokens: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                output_tokens: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                requests: r.get(3)?,
+            })
+        },
+    )
+}
+
 /// 按代理(agent 列)汇总;模式同 get_model_stats,但无费用(费用按模型定价,代理维度不折算)
 pub fn get_agent_stats(conn: &Connection, range: &Range) -> rusqlite::Result<Vec<AgentStat>> {
     let (where_sql, params) = build_where(range);

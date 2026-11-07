@@ -981,6 +981,9 @@ th.num {
   .cds-pop {
     animation: none;
   }
+  .cds-pop-side {
+    animation: none;
+  }
   *,
   *::before,
   *::after {
@@ -1061,10 +1064,10 @@ header[data-scrolled="true"] .header-hairline {
   to { transform: translateX(460%); }
 }
 
-/* 导航共享滑块：宽度/高度跟随 CSS 变量，纵坐标由组件实测后写入 transform */
+/* 导航选中条：贴在侧栏左缘，纵坐标由组件实测后写入 transform */
 .app-nav {
   --nav-pad: 8px;
-  --nav-item-h: 30px;
+  --nav-item-h: 34px;
   padding-left: var(--nav-pad);
   padding-right: var(--nav-pad);
   --cds-scroll-fade-top: 0px;
@@ -1074,25 +1077,44 @@ header[data-scrolled="true"] .header-hairline {
   --nav-pad: 12px;
   --nav-item-h: 32px;
 }
-.nav-glider {
+.nav-bar {
   position: absolute;
   /* top: 0 让绝对定位以 nav 的 padding box 为原点；缺省 auto 会落在内容盒，
-     正好差一个 padding-top，滑块就会比条目低 6px。 */
+     正好差一个 padding-top，选中条就会比条目低 6px。 */
   top: 0;
-  left: var(--nav-pad);
-  right: var(--nav-pad);
-  height: var(--nav-item-h);
-  border-radius: 8px;
-  background: var(--cds-nav-pill);
-  box-shadow: var(--cds-nav-pill-shadow);
+  left: 0;
+  width: 2px;
+  height: 18px;
+  border-radius: 0 2px 2px 0;
+  background: var(--cds-clay);
   pointer-events: none;
   will-change: transform;
   transition:
     transform 320ms var(--cds-spring-press),
-    height 150ms var(--cds-ease-out-expo),
-    left var(--cds-dur-base) var(--cds-ease-out-expo),
-    right var(--cds-dur-base) var(--cds-ease-out-expo),
     opacity var(--cds-dur-fast) var(--cds-ease-out-expo);
+}
+
+/* 分组标题的延伸发丝线：从标签右侧淡出到栏边，补足横向结构 */
+.nav-rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, var(--cds-border), transparent);
+}
+
+/* 侧栏底部弹出的菜单从右侧飞出：范围日历 252px，比 200px 的侧栏宽 */
+@keyframes cds-pop-side-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.cds-pop-side {
+  animation: cds-pop-side-in var(--cds-dur-fast) var(--cds-ease-overshoot);
+  will-change: transform, opacity;
 }
 
 /* 收起时标签淡出并向左收 3px；宽度由按钮宽度自然压到 0，不拆 DOM */

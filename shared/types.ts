@@ -319,6 +319,14 @@ export interface TokenRate {
   bySource: SourceRate[];
 }
 
+/** 单个来源在区间内的总量。不受当前来源筛选影响：侧栏用它横向比较各来源 */
+export interface SourceTotal {
+  source: string;
+  inputTokens: number;
+  outputTokens: number;
+  requests: number;
+}
+
 /** 一次刷新返回的全部面板数据(后端 get_dashboard 合并命令,同一数据库快照) */
 export interface DashboardPayload {
   summary: Summary;
@@ -336,6 +344,8 @@ export interface DashboardPayload {
   monthlyTrend: MonthPoint[];
   /** 各数据源状态；某源不可用时前端置灰并提示 */
   sources: SourceStatus[];
+  /** 各来源在区间内的 Token 总量（不受筛选影响） */
+  sourceTotals: SourceTotal[];
   /** 聚合范围下不完整的指标（如 DSH 不提供 reasoning tokens） */
   capabilities: string[];
   /** 实时 Token 速度；调用方没给窗口长度时为 null */
