@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import type { Summary, TrendPoint } from "../../shared/types";
-import { fmtCostSplitAdaptive, fmtHitRate, fmtSpeed, fmtTokens } from "../format";
+import { costSplitCandidates, fmtHitRate, fmtSpeed, fmtTokens } from "../format";
 import { Delta, Sparkline } from "./ui/data-viz";
 import { cn } from "@/lib/utils";
 
@@ -18,10 +18,110 @@ type Kpi = {
   good?: "up" | "down" | "none";
   /** 速率类指标用平均，量类用求和 */
   avg?: boolean;
+  /** 按可用宽度挑选的候选显示串（小数位从多到少）；有则用真实探针测量后取值 */
+  candidates?: string[];
 };
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0);
 const sum = (xs: number[]) => xs.reduce((s, x) => s + x, 0);
+
+/**
+ * 数值行的可用宽度 → 从候选中挑「放得下且小数位最多」的串。
+ *
+ * 性能约束（侧栏展开/收起有 200ms 宽度动画，逐帧触发 ResizeObserver）：
+ * - 探针只创建一次并复用，不在每帧 append/remove DOM；
+ * - 回调按 rAF 合并，同一帧内 RO + window.resize 只测一次；
+ * - 卡片宽度未变（±1px）直接跳过，不做 getBoundingClientRect 强制同步布局；
+ * - 只有选中的串变化才 setState，避免无谓重渲染。
+ * 探针挂在视口外、与数值同字体同字号：不占位、不产生根滚动条。
+ */
+function useFittedValue(candidates: string[] | undefined, fallback: string) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [value, setValue] = useState(fallback);
+  // 用内容做依赖：父组件每 30 秒刷新会重建候选数组，引用不稳会导致重复挂载 RO。
+  const listRef = useRef(candidates);
+  listRef.current = candidates;
+  const key = candidates?.join("\u0001") ?? "";
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || list.length === 0) {
+      setValue(fallback);
+      return;
+    }
+    const card = cardRef.current;
+    if (!card) return;
+
+    const probe = document.createElement("span");
+    probe.className = "text-[26px] leading-none font-semibold tracking-tight tabular-nums";
+    probe.style.cssText =
+      "position:fixed;left:-9999px;top:0;white-space:nowrap;visibility:hidden;pointer-events:none;";
+    document.body.appendChild(probe);
+
+    const shortest = list.reduce((a, b) => (b.length < a.length ? b : a), list[0]);
+    let lastWidth = -1;
+    let lastMeasureAt = 0;
+    let throttleTimer = 0;
+    let settleTimer = 0;
+
+    const measure = () => {
+      lastMeasureAt = Date.now();
+      // 数值行左右各 px-4(16px)；unit（如 tok/s）与 gap 预留约 44px
+      const available = Math.max(80, card.clientWidth - 32 - (card.dataset.hasUnit === "1" ? 44 : 0));
+      if (Math.abs(available - lastWidth) < 1) return;
+      lastWidth = available;
+      let chosen = shortest;
+      for (const c of list) {
+        probe.textContent = c;
+        if (probe.getBoundingClientRect().width <= available) {
+          chosen = c;
+          break;
+        }
+      }
+      setValue((prev) => (prev === chosen ? prev : chosen));
+    };
+
+    /**
+     * 侧栏展开是 200ms 宽度动画，ResizeObserver 逐帧触发。
+     * 连续变化期间最多每 80ms 测一次；停止变化 120ms 后补一次最终测量，
+     * 保证动画结束落在正确档位。用 setTimeout 而非 rAF：WebView2 失焦时
+     * rAF 会被节流停摆，收尾补测必须可靠触发。
+     */
+    const schedule = () => {
+      clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(measure, 120);
+      const wait = Math.max(0, 80 - (Date.now() - lastMeasureAt));
+      if (!throttleTimer) {
+        throttleTimer = window.setTimeout(() => {
+          throttleTimer = 0;
+          measure();
+        }, wait);
+      }
+    };
+
+    measure();
+    // 字体加载完成后再测一次：首屏跑在 webfont 应用之前，探针宽度偏小会误判。
+    let cancelled = false;
+    document.fonts?.ready.then(() => {
+      if (cancelled) return;
+      lastWidth = -1;
+      measure();
+    });
+    const ro = new ResizeObserver(schedule);
+    ro.observe(card);
+    window.addEventListener("resize", schedule);
+    return () => {
+      cancelled = true;
+      clearTimeout(throttleTimer);
+      clearTimeout(settleTimer);
+      ro.disconnect();
+      window.removeEventListener("resize", schedule);
+      probe.remove();
+    };
+  }, [key, fallback]);
+
+  return { cardRef, value };
+}
 
 function KpiCard({ item }: { item: Kpi }) {
   const values = item.series.filter((v) => Number.isFinite(v));
@@ -29,9 +129,15 @@ function KpiCard({ item }: { item: Kpi }) {
   const cut = Math.floor(n / 2);
   const prev = n >= 2 ? (item.avg ? mean(values.slice(0, cut)) : sum(values.slice(0, cut))) : 0;
   const cur = n >= 2 ? (item.avg ? mean(values.slice(cut)) : sum(values.slice(cut))) : 0;
+  const { cardRef, value } = useFittedValue(item.candidates, item.value);
+  const display = item.candidates ? value : item.value;
 
   return (
-    <div className="group relative overflow-hidden rounded-panel bg-card px-4 pt-3 pb-2.5 shadow-panel transition-shadow hover:shadow-panel-hover">
+    <div
+      ref={cardRef}
+      data-has-unit={item.unit && display !== "-" ? "1" : undefined}
+      className="group relative overflow-hidden rounded-panel bg-card px-4 pt-3 pb-2.5 shadow-panel transition-shadow hover:shadow-panel-hover"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="text-[10.5px] font-medium tracking-[0.09em] text-muted-foreground uppercase">
           {item.label}
@@ -40,10 +146,13 @@ function KpiCard({ item }: { item: Kpi }) {
       </div>
 
       <div className="mt-1.5 flex items-baseline gap-1">
-        <span className="text-[26px] leading-none font-semibold tracking-tight tabular-nums">
-          {item.value}
+        <span
+          data-kpi-value={item.label}
+          className="text-[26px] leading-none font-semibold tracking-tight tabular-nums"
+        >
+          {display}
         </span>
-        {item.unit && item.value !== "-" && (
+        {item.unit && display !== "-" && (
           <span className="text-[11px] font-medium text-muted-foreground">{item.unit}</span>
         )}
       </div>
@@ -77,6 +186,12 @@ export function SummaryCards({
   source?: "all" | "zcode" | "dsh" | "claude";
 }) {
   const [more, setMore] = useState(false);
+  // 费用候选按精度排好序；首个就是 8 位以上场景的缩写串，用作探针测量前的首屏兜底，
+  // 避免先闪一下完整长串再收缩。summary 变化时重算。
+  const costCandidates = useMemo(
+    () => (summary ? costSplitCandidates(summary.costUsd, summary.costCny) : ["$0.00"]),
+    [summary?.costUsd, summary?.costCny],
+  );
   const partialReasoning = capabilities.includes("reasoningTokens");
   const partialCacheWrite = capabilities.includes("cacheCreateTokens");
   const partialDecode = capabilities.includes("decodeSpeed");
@@ -114,7 +229,8 @@ export function SummaryCards({
         },
         {
           label: "估算费用",
-          value: fmtCostSplitAdaptive(summary.costUsd, summary.costCny),
+          value: costCandidates[0] ?? "$0.00",
+          candidates: costCandidates,
           hint: summary.unpricedModels.length > 0 ? `${summary.unpricedModels.length} 个模型未配置单价` : "逐请求计价 · 含峰谷",
           warn: summary.unpricedModels.length > 0,
           series: series.cost,

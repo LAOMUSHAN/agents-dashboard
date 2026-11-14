@@ -83,34 +83,86 @@ export function fmtCostSplit(usd: number | null | undefined, cny: number | null 
   return `¥${amount(c)} · $${amount(u)}`;
 }
 
-/** 整数位数（0.xx 的 0 也算一位） */
+/** 金额的整数位数（0.xx 记 1 位） */
 function integerDigits(v: number): number {
   return Math.max(1, Math.trunc(Math.abs(v)).toString().length);
 }
 
 /**
- * 估算费用 KPI 专用：按两个币种「整数位 + 2 位小数」的总位数控制显示宽度。
- * ≤9 位保留 2 位小数；10–11 位降到 1 位；≥12 位不带小数。
- * 这样正常金额保持分位精度，金额变大时优先牺牲小数位而不是让值折行。
- * 分以下的金额仍走原 4 位小数，避免被抹成 0。
+ * 单侧金额缩写：按该侧整数位数选单位。
+ * 4 位→K(2.7K)、5 位→W(2.7W)、6 位→W(27W)、7 位→M(2.7M)、8 位→M(27M)、
+ * 9 位→M(270M)，10 位以上→B(2.7B/27B)。W=万、M=百万、B=十亿。
+ *
+ * 小数用截断而非四舍五入：2.771K 显示 2.7K（与口径示例一致，也避免 999→1.0K
+ * 这种「涨了一档」的错觉）。缩放后整数部分 ≥10 时省略小数（27W 而不是 27.0W）。
+ * `decimals=0` 是窄窗口下的更短兜底（3K）。
  */
-export function fmtCostSplitAdaptive(
+function abbreviate(value: number, decimals: number): string {
+  const digits = integerDigits(value);
+  // 不足 1000 的一侧不缩写：合计位数达标时可能是「3 位 + 5 位」，
+  // 把它写成 0.9K / 0K 反而更难读，保留原始整数更清楚。
+  if (digits <= 3) return String(Math.trunc(value));
+  let divisor: number;
+  let unit: string;
+  if (digits <= 4) {
+    divisor = 1e3;
+    unit = "K";
+  } else if (digits <= 6) {
+    divisor = 1e4;
+    unit = "W";
+  } else if (digits <= 9) {
+    divisor = 1e6;
+    unit = "M";
+  } else {
+    divisor = 1e9;
+    unit = "B";
+  }
+  const scaled = Math.abs(value) / divisor;
+  const sign = value < 0 ? "-" : "";
+  // 缩放后 ≥10 或 decimals=0 时不带小数；否则截断到 1 位小数
+  const showDecimals = decimals > 0 && scaled < 10;
+  const shown = showDecimals ? Math.trunc(scaled * 10) / 10 : Math.trunc(scaled);
+  return `${sign}${shown}${unit}`;
+}
+
+/**
+ * 估算费用 KPI 的候选显示串，按精度从高到低排列。
+ * 组件用真实宽度探针挑出「放得下且最精确」的那个：宽则小数位多，窄则少。
+ *
+ * 两侧整数位合计 ≥8 时（如 ¥2771 · $1396）优先用 K/W/M 缩写，避免 26px 字号下
+ * 完整数字被硬截断成两行；<8 时优先完整数字。两种档位都作为候选保留：
+ * 超宽窗口仍能读到完整值，极窄窗口也不会折行（缩写是最短兜底）。
+ * 分以下的金额仍走 4 位小数，避免被抹成 0。
+ */
+export function costSplitCandidates(
   usd: number | null | undefined,
   cny: number | null | undefined,
-): string {
+): string[] {
   const u = usd ?? 0;
   const c = cny ?? 0;
   const tiny = (v: number) => v !== 0 && Math.abs(v) < 0.01;
-  if (tiny(u) || tiny(c)) return fmtCostSplit(u, c);
+  if (tiny(u) || tiny(c)) return [fmtCostSplit(u, c)];
 
   const parts: { symbol: string; value: number }[] = [];
   if (c !== 0) parts.push({ symbol: "¥", value: c });
   if (u !== 0) parts.push({ symbol: "$", value: u });
-  if (parts.length === 0) return "$0.00";
+  if (parts.length === 0) return ["$0.00"];
 
-  const rawDigits = parts.reduce((sum, p) => sum + integerDigits(p.value) + 2, 0);
-  const decimals = rawDigits <= 9 ? 2 : rawDigits <= 11 ? 1 : 0;
-  return parts.map((p) => `${p.symbol}${p.value.toFixed(decimals)}`).join(" · ");
+  const full: string[] = [];
+  for (let d = 2; d >= 0; d--) {
+    full.push(parts.map((p) => `${p.symbol}${p.value.toFixed(d)}`).join(" · "));
+  }
+  const compact: string[] = [];
+  for (const d of [1, 0]) {
+    compact.push(parts.map((p) => `${p.symbol}${abbreviate(p.value, d)}`).join(" · "));
+  }
+
+  const totalDigits = parts.reduce((sum, p) => sum + integerDigits(p.value), 0);
+  // 合计 ≥8：缩写优先（避免硬截断），完整值留给超宽窗口；
+  // 合计 <8：完整值优先，缩写作为「连 0 位小数都放不下」时的最终兜底。
+  // 去重：6 位/8 位时缩写 1 位与 0 位相同，小金额的完整 0 位与缩写也可能撞串。
+  const ordered = totalDigits >= 8 ? [...compact, ...full] : [...full, ...compact];
+  return [...new Set(ordered)];
 }
 
 /** 占比:part/total,total 为 0 时返回 "-" */

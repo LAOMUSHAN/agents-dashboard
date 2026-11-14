@@ -7,7 +7,7 @@
 
 Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你本机上 AI 代理的每一次模型调用、工具调用和费用摊开来看清楚——用了多少 token、花在哪、贵在哪、命中率如何、哪里在浪费。数据全部来自本机数据库，只读、不上传。
 
-> **支持 ZCode 与 DSH 两个数据源**：zcode 读取 `~/.zcode/cli/db/db.sqlite`，DSH 读取 `~/.dsh/sessions` 下的会话日志；顶部可切换「全部 / zcode / DSH」，两个源都有用量时默认聚合展示。
+> **支持 ZCode、DSH 与 Claude Code 三个数据源**：zcode 读取 `~/.zcode/cli/db/db.sqlite`（含 2026-10-12 之前的早期用量索引），DSH 读取 `~/.dsh/sessions` 下的会话日志，Claude Code 读取 `~/.claude/projects`；顶部可切换「全部 / zcode / DSH / Claude」，多个源都有用量时默认聚合展示。
 
 ## 界面预览
 
@@ -86,18 +86,21 @@ Agents Dashboard 是一个本地优先的 AI 编码代理用量看板：把你�
 
 ## 数据源
 
-看板同时接入两个本机数据源，顶部「全部 / zcode / DSH」切换范围；默认「全部」，两个源都有用量时洞察条会给出请求与 token 的构成比例。
+看板同时接入三个本机数据源，顶部「全部 / zcode / DSH / Claude」切换范围；默认「全部」，多个源都有用量时洞察条会给出请求与 token 的构成比例。
 
 | 数据源 | 数据位置 | 接入方式 |
 | --- | --- | --- |
-| zcode | `~/.zcode/cli/db/db.sqlite` | 只读打开原库 |
+| zcode | `~/.zcode/cli/db/db.sqlite` | 只读打开原库（`model_usage` 逐请求表 + 早期用量索引） |
 | DSH | `~/.dsh/sessions/<项目>/<会话>/session[.v4].jsonl.zstd` | 流式解压多帧 zstd，索引到本机 `dsh-index.sqlite` |
+| Claude Code | `~/.claude/projects/**/*.jsonl` | 追加读 + 尾部指纹增量，索引到同一个 `dsh-index.sqlite` |
 
-- DSH 索引文件：`%APPDATA%\io.github.laomushan.agents-dashboard\dsh-index.sqlite`（macOS 为 `~/Library/Application Support/io.github.laomushan.agents-dashboard/dsh-index.sqlite`）。首次查询建索引（本机 146 个文件约 2 秒），之后按文件大小/修改时间增量更新，2 秒节流（顶栏实时速度按刷新间隔采样，节流更长会让 5 秒窗口周期性掉回 0）。
-- 两个源都只读；DSH 的供应商/模型配置由 DSH 自己管理。
-- **没有后台服务、计划任务或开机自启**：索引更新只发生在界面查询时；窗口隐藏到托盘后暂停刷新与索引，退出应用后不再有任何活动。
-- 聚合口径：请求数、会话数、token、费用直接相加；速度、首 token、延迟分位数按来源分别计算后再展示（同名模型会出现两行并带来源徽章），避免把两个源的耗时混成一个平均值。
+- 索引文件：`%APPDATA%\io.github.laomushan.agents-dashboard\dsh-index.sqlite`（macOS 为 `~/Library/Application Support/io.github.laomushan.agents-dashboard/dsh-index.sqlite`）。DSH / Claude 按文件大小、修改时间（Claude 另加尾部指纹）增量更新，2 秒节流；窗口隐藏到托盘后暂停刷新与索引，退出应用后不再有任何活动。
+- **ZCode 早期用量**：`model_usage` 表只从 2026-10-12 起才有逐请求记录；更早的用量保存在同库 `message.data` 的 assistant 消息里。索引器把它们物化成同构行并入 zcode 源（与实时行共用 `zc:` 前缀和 `zc.session`），按 `rowid` 分批建库，界面每轮刷新补一批、十几轮内补齐全量，期间已入库的数据立即可查。历史行的 `input_tokens` 已含缓存读，不重复加 `cacheRead`；没有首 token 时间，`time_to_first_token_ms` 为 NULL。
+- 三个源都只读；DSH 的供应商/模型配置由 DSH 自己管理，ZCode 原库始终以 `mode=ro` + `query_only` 打开。
+- **没有后台服务、计划任务或开机自启**：索引更新只发生在界面查询时。
+- 聚合口径：请求数、会话数、token、费用直接相加；速度、首 token、延迟分位数按来源分别计算后再展示（同名模型会出现两行并带来源徽章），避免把不同源的耗时混成一个平均值。
 - DSH 缺口：日志不提供推理 tokens、缓存写通常为 0、工具取消状态不可辨；首 token 与解码速度按日志里的流式时间戳计算，缺少时间戳的请求不计入解码口径。工具耗时晚于 step 结束时间的结果按未知处理，避免会话隔天恢复时的补发结果污染统计。
+- Claude 缺口：2.1.3xx 之前的旧会话没有 `api-request` 事件，耗时与首 token 速度只能回退估算、错误行无法归因；token 用量本身是逐请求真实值。
 
 ## 费用估算口径
 
@@ -193,19 +196,22 @@ xattr -cr "/Applications/Agents Dashboard.app"
 
 ## 数据来源与隐私
 
-应用读取两类本机文件，数据库始终**只读**打开，不写入、不上传，也不联网：
+应用读取三类本机文件，源数据始终**只读**打开，不写入、不上传，也不联网；只把索引写进应用自己的配置目录：
 
 | 文件 | 默认路径 | 用途 | 可覆盖 |
 | --- | --- | --- | --- |
 | ZCode 数据库 | `~/.zcode/cli/db/db.sqlite` | 用量、会话、工具调用统计 | `ZCODE_DB_PATH` |
 | ZCode 供应商配置 | `~/.zcode/v2/provider_config.json` | 供应商展示名兜底（只读） | `ZCODE_PROVIDER_CONFIG_PATH` |
 | ZCode 旧版配置 | `~/.zcode/v2/config.json` | 仅作旧 provider id 的展示名兜底（只读） | `ZCODE_CONFIG_PATH` |
+| DSH 会话日志 | `~/.dsh/sessions` | DSH 用量 | `DSH_SESSIONS_PATH` / `DSH_HOME` |
+| Claude Code 会话 | `~/.claude/projects` | Claude 用量 | `CLAUDE_PROJECTS_PATH` / `CLAUDE_CONFIG_DIR` |
 
 统计口径：
 
 - `model_usage` 表：每次模型调用一行（模型、各类 token、时间、耗时、状态），只计入 `status = 'completed'` 的请求
 - `session` 表：会话标题与项目目录；子代理会话通过 `parent_id` 归属到父会话的项目
 - `tool_usage` 与 `part` 表：工具调用次数、耗时与错误率
+- ZCode 早期用量（`model_usage` 起点之前）：从 `message.data` 的 assistant 消息与 `part.data` 的 tool 事件反推，物化到索引库的 `zcode_history_model_usage` / `zcode_history_tool_usage`，并入 zcode 源；口径见上文「数据源」
 
 调试或演示时可以指向别的数据库，不影响真实数据：
 

@@ -513,6 +513,15 @@ export function ActivityHeatmap({
         return plain("single", [todayKey], `今天 · ${fmtLongDay(todayKey)}`);
       case "yesterday":
         return plain("single", [yesterdayKey], `昨天 · ${fmtLongDay(yesterdayKey)}`);
+      case "24h": {
+        // 相对窗口没有固定起止：按数据实际覆盖的日期画，
+        // 跨日时第一行只包含窗口内的最后几个小时
+        if (cellDays.length === 0) return plain("dates", [], "近 24 小时");
+        const from = cellDays[0];
+        const to = cellDays[cellDays.length - 1];
+        if (from === to) return plain("single", [from], `近 24 小时 · ${fmtLongDay(from)}`);
+        return plain("dates", dayKeys(from, to), `近 24 小时 · ${fmtDay(from)} – ${fmtDay(to)}`);
+      }
       case "7d": {
         const keys = lastNDays(today, 7);
         return plain("dates", keys, `${fmtDay(keys[0])} – ${fmtDay(keys[6])} · 7 天`);

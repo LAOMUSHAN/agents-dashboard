@@ -8,6 +8,7 @@ mod queries;
 mod sources;
 mod types;
 mod unified;
+mod zcode_history;
 
 use error::AppError;
 use serde::Serialize;
@@ -30,6 +31,8 @@ pub struct Inner {
     dsh: Mutex<dsh::DshIndexer>,
     /// Claude Code 索引器；和 DSH 共用同一个可重建的索引库
     claude: Mutex<claude::ClaudeIndexer>,
+    /// ZCode 早期用量索引器；读同一个 zcode 库，共用同一个可重建的索引库
+    zcode_history: Mutex<zcode_history::ZcodeHistoryIndexer>,
     /// 主窗口是否可见；隐藏到托盘时即使前端还有漏网的刷新，也不做索引扫描/写入
     visible: AtomicBool,
     pricing_path: PathBuf,
@@ -49,10 +52,11 @@ impl std::ops::Deref for AppState {
 
 impl AppState {
     /// 单源查询连接（旧的逐项命令用；主面板走 get_dashboard）。
-    /// 每次调用前补一次 DSH/Claude 增量；索引器内部有 2 秒节流，不会反复扫盘。
+    /// 每次调用前补一次三个索引器的增量；各自有 2 秒节流，不会反复扫盘。
     fn conn(&self) -> Result<rusqlite::Connection, String> {
         self.ensure_dsh(false);
         self.ensure_claude(false);
+        self.ensure_zcode_history(false);
         self.query_conn(SourceFilter::All).map_err(|e| e.to_string())
     }
 }
@@ -84,6 +88,23 @@ impl Inner {
         match indexer.ensure_fresh(full) {
             Ok(stats) => stats,
             Err(e) => claude::IndexStats::error(e.to_string()),
+        }
+    }
+
+    /// ZCode 早期用量索引器：同样只在查询时工作，隐藏到托盘时不读源库。
+    fn ensure_zcode_history(&self, full: bool) -> zcode_history::IndexStats {
+        let mut indexer = self
+            .zcode_history
+            .lock()
+            .expect("zcode history index mutex poisoned");
+        if !self.visible.load(Ordering::Relaxed) {
+            return indexer
+                .stats()
+                .unwrap_or_else(|e| zcode_history::IndexStats::error(e.to_string()));
+        }
+        match indexer.ensure_fresh(full) {
+            Ok(stats) => stats,
+            Err(e) => zcode_history::IndexStats::error(e.to_string()),
         }
     }
 
@@ -146,6 +167,7 @@ impl Inner {
     ) -> Result<types::DashboardPayload, AppError> {
         let dsh_stats = self.ensure_dsh(false);
         let claude_stats = self.ensure_claude(false);
+        self.ensure_zcode_history(false);
         let p = &self.pricing_path;
         let names = self.provider_names();
         let rate_window = rate_window_sec.map(|s| s.clamp(1, 86_400));
@@ -300,6 +322,8 @@ async fn get_models(
     let inner = state.inner.clone();
     tauri::async_runtime::spawn_blocking(move || {
         inner.ensure_dsh(false);
+        inner.ensure_claude(false);
+        inner.ensure_zcode_history(false);
         let conn = inner.query_conn(SourceFilter::All)?;
         queries::get_model_stats(&conn, &range, &inner.pricing_path).map_err(AppError::from)
     })
@@ -347,6 +371,8 @@ async fn get_requests(
     let page_size = page_size.clamp(5, 50);
     tauri::async_runtime::spawn_blocking(move || {
         inner.ensure_dsh(false);
+        inner.ensure_claude(false);
+        inner.ensure_zcode_history(false);
         let conn = inner.query_conn(filter)?;
         queries::get_request_log(&conn, &range, page, page_size, &inner.pricing_path)
             .map_err(AppError::from)
@@ -481,6 +507,8 @@ async fn estimate_cost(
     let inner = state.inner.clone();
     tauri::async_runtime::spawn_blocking(move || {
         inner.ensure_dsh(false);
+        inner.ensure_claude(false);
+        inner.ensure_zcode_history(false);
         let conn = inner.query_conn(SourceFilter::All)?;
         let mut cfg = (*pricing::load(&inner.pricing_path)).clone();
         cfg.models.insert(model_id.clone(), entry);
@@ -503,6 +531,7 @@ struct Meta {
 fn get_meta(state: tauri::State<AppState>) -> Meta {
     let stats = state.ensure_dsh(false);
     let claude_stats = state.ensure_claude(false);
+    state.ensure_zcode_history(false);
     let (dsh_root, index_path) = state
         .dsh
         .lock()
@@ -784,12 +813,17 @@ pub fn run() {
                 sources::claude_projects_root(),
                 index_path.clone(),
             );
+            let zcode_history = zcode_history::ZcodeHistoryIndexer::new(
+                zcode_path.clone(),
+                index_path.clone(),
+            );
             app.manage(AppState {
                 inner: Arc::new(Inner {
                     zcode_path,
                     index_path,
                     dsh: Mutex::new(dsh),
                     claude: Mutex::new(claude),
+                    zcode_history: Mutex::new(zcode_history),
                     visible: AtomicBool::new(true),
                     pricing_path,
                 }),

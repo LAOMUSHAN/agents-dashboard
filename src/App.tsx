@@ -110,13 +110,6 @@ function getInitialTab(): Tab {
   return TABS.some((t) => t.value === v) ? (v as Tab) : "overview";
 }
 
-// 侧栏收起状态持久化;视口过窄时强制收起(AITracker 的 <1120px 规则)
-const NAV_COLLAPSE_KEY = "navCollapsed";
-
-function getInitialNavCollapsed(): boolean {
-  return localStorage.getItem(NAV_COLLAPSE_KEY) === "1";
-}
-
 export default function App() {
   const rangeState = useRange();
   const { range } = rangeState;
@@ -126,7 +119,6 @@ export default function App() {
   const [visible, setVisible] = useState(true);
   const [themeMode, setThemeModeState] = useState<ThemeMode>(getThemeMode);
   const [tab, setTab] = useState<Tab>(getInitialTab);
-  const [navCollapsed, setNavCollapsed] = useState<boolean>(getInitialNavCollapsed);
   // 总览模块的顺序与显隐；旧版的「展开更多分析」折叠按钮由设置页取代
   const [overviewLayout, setOverviewLayout] = useState<OverviewLayout>(() => defaultOverviewLayout());
   // ui-prefs.json 是整文件写入：保存前先合并已有字段，避免两个设置互相覆盖
@@ -219,27 +211,6 @@ export default function App() {
     const next = event.currentTarget.scrollTop > 2;
     setScrolled((prev) => (prev === next ? prev : next));
   };
-
-  const toggleNav = () => {
-    setNavCollapsed((c) => {
-      localStorage.setItem(NAV_COLLAPSE_KEY, c ? "0" : "1");
-      return !c;
-    });
-  };
-
-  // Tauri 窗口拖拽调宽:<1120px 自动收起侧栏,恢复宽度不自动展开(尊重用户手动选择)
-  useEffect(() => {
-    const onResize = () => {
-      if (window.innerWidth < 1120) {
-        setNavCollapsed((c) => {
-          if (!c) localStorage.setItem(NAV_COLLAPSE_KEY, "1");
-          return true;
-        });
-      }
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
 
   const savePrefs = (patch: Record<string, unknown>) => {
     prefsRef.current = { ...prefsRef.current, ...patch };
@@ -381,8 +352,6 @@ export default function App() {
         groups={navGroups}
         active={tab}
         onSelect={(value) => switchTab(value as Tab)}
-        collapsed={navCollapsed}
-        onToggleCollapsed={toggleNav}
         version={__APP_VERSION__}
         scope={source}
         onScopeChange={setSourceScope}

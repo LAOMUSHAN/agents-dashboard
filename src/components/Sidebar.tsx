@@ -1,10 +1,10 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
 import type { SourceFilter, SourceStatus } from "../../shared/types";
 import brandMark from "@/assets/brand-mark.svg";
 import { toggleMaximize } from "@/lib/window";
 import { cn } from "@/lib/utils";
-import { fmtTokensCompact } from "@/format";
+import { fmtTokens } from "@/format";
 import { DateRangePicker, useRange } from "./DateRangePicker";
 
 /**
@@ -82,12 +82,17 @@ function isToday(ms: number): boolean {
   );
 }
 
+/** 收起状态由侧栏自己持有：点展开/收起只重渲染侧栏，不惊动主内容区的图表与表格。 */
+const NAV_COLLAPSE_KEY = "navCollapsed";
+
+function getInitialCollapsed(): boolean {
+  return localStorage.getItem(NAV_COLLAPSE_KEY) === "1";
+}
+
 export function Sidebar({
   groups,
   active,
   onSelect,
-  collapsed,
-  onToggleCollapsed,
   version,
   status,
   scope,
@@ -98,8 +103,6 @@ export function Sidebar({
   groups: SidebarGroup[];
   active: string;
   onSelect: (value: string) => void;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
   version: string;
   status: SidebarStatus;
   scope: SourceFilter;
@@ -109,9 +112,30 @@ export function Sidebar({
   sourceTokens: Record<string, number> | null;
 }) {
   const navRef = useRef<HTMLElement>(null);
-  // 选中条只记纵坐标，横坐标固定在侧栏左缘
+  const [collapsed, setCollapsed] = useState<boolean>(getInitialCollapsed);
   const [barTop, setBarTop] = useState<number | null>(null);
   const [barReady, setBarReady] = useState(false);
+
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      localStorage.setItem(NAV_COLLAPSE_KEY, c ? "0" : "1");
+      return !c;
+    });
+  };
+
+  // Tauri 窗口拖拽调窄:<1120px 自动收起侧栏,恢复宽度不自动展开(尊重用户手动选择)
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth < 1120) {
+        setCollapsed((c) => {
+          if (!c) localStorage.setItem(NAV_COLLAPSE_KEY, "1");
+          return true;
+        });
+      }
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // 垂直 tablist 的 roving focus：方向键在条目间移动，Home/End 跳到首尾
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
@@ -139,7 +163,9 @@ export function Sidebar({
     nodes[next]?.focus();
   };
 
-  // 选中条落位：读选中条目的矩形，换算成 nav 内容坐标（含滚动量），再居中到行高
+  // 选中条落位：纵坐标只受选中项和收起态（行高/分组标题）影响，与窗口宽度无关。
+  // 不用 ResizeObserver 逐帧跟随宽度动画（那会让侧栏每帧重渲染）；只在状态变化时测一次，
+  // 并在 200ms 宽度动画结束后补一次，选中条自身的 320ms 弹簧过渡会覆盖中间帧。
   useLayoutEffect(() => {
     const nav = navRef.current;
     if (!nav) return;
@@ -151,13 +177,12 @@ export function Sidebar({
       }
       const navRect = nav.getBoundingClientRect();
       const itemRect = selected.getBoundingClientRect();
-      setBarTop(itemRect.top - navRect.top + nav.scrollTop + (itemRect.height - 18) / 2);
+      const top = itemRect.top - navRect.top + nav.scrollTop + (itemRect.height - 18) / 2;
+      setBarTop(top);
     };
     measure();
-    // 侧栏宽度动画、窗口缩放都会改变条目矩形；ResizeObserver 逐帧跟随
-    const observer = new ResizeObserver(measure);
-    observer.observe(nav);
-    return () => observer.disconnect();
+    const settle = window.setTimeout(measure, 220);
+    return () => clearTimeout(settle);
   }, [active, collapsed]);
 
   // 首帧先把选中条放到位置，再开启过渡，避免启动时从顶部滑下来
@@ -208,12 +233,12 @@ export function Sidebar({
     {
       id: "all",
       label: "全部",
-      meta: totalTokens == null ? "" : fmtTokensCompact(totalTokens),
+      meta: totalTokens == null ? "" : fmtTokens(totalTokens),
     },
     ...status.sources.map((s) => ({
       id: s.id as SourceFilter,
       label: s.label,
-      meta: sourceTokens ? fmtTokensCompact(sourceTokens[s.id] ?? 0) : "",
+      meta: sourceTokens ? fmtTokens(sourceTokens[s.id] ?? 0) : "",
       warn: !s.available,
     })),
   ];
@@ -245,7 +270,7 @@ export function Sidebar({
         {collapsed ? (
           <button
             type="button"
-            onClick={onToggleCollapsed}
+            onClick={toggleCollapsed}
             onDoubleClick={(event) => event.stopPropagation()}
             title="展开侧栏"
             aria-label="展开侧栏"
@@ -283,7 +308,7 @@ export function Sidebar({
             </span>
             <button
               type="button"
-              onClick={onToggleCollapsed}
+              onClick={toggleCollapsed}
               onDoubleClick={(event) => event.stopPropagation()}
               title="收起侧栏"
               aria-label="收起侧栏"

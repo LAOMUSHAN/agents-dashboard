@@ -1124,8 +1124,16 @@ header[data-scrolled="true"] .header-hairline {
     transform 140ms var(--cds-ease-out-expo);
 }
 [data-collapsed="true"] .nav-label {
+  /* 收起态按钮是固定 32px 正方形：label 必须彻底脱离 flex 流，
+     否则 flex-1 仍占位把图标挤到左边（截图里图标偏左就是这个）。
+     保留 DOM 与淡出过渡，用绝对定位 + 1px 尺寸让它不参与布局。 */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
   opacity: 0;
   transform: translateX(-3px);
+  pointer-events: none;
 }
 
 /* 切页入场：只动内容层，侧栏滑块与顶栏标题各自独立运动 */

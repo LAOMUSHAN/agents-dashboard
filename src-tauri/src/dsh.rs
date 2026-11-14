@@ -93,6 +93,9 @@ struct StoredFile {
     size: u64,
     mtime: i64,
     session_id: Option<String>,
+    /// 台账里登记了 session，但 dsh_session / dsh_model_usage 里没有行。
+    /// 这类目录通常是早先被按 session_id 全局删除误伤的幸存副本，必须重索引。
+    orphan: bool,
 }
 
 struct Usage {
@@ -246,14 +249,18 @@ impl DshIndexer {
         let mut errors: Vec<String> = Vec::new();
 
         for f in &files {
-            let unchanged = stored
-                .get(&f.dir_key)
+            let st = stored.get(&f.dir_key);
+            let unchanged = st
                 .map(|s| s.path == f.path && s.size == f.size && s.mtime == f.mtime)
                 .unwrap_or(false);
-            if unchanged && !effective_full {
+            // 台账有、数据表无的目录必须重索引：早先「消失目录按 session_id 全局删除」
+            // 会抹掉幸存副本的行，而 (size,mtime) 未变会让它们永远被跳过。
+            let orphan = st.map(|s| s.orphan).unwrap_or(false);
+            if unchanged && !effective_full && !orphan {
                 continue;
             }
-            if !effective_full && started.elapsed() > self.budget {
+            // 孤儿自愈不占增量预算：73 个旧会话必须一次补齐，不能每轮只补几个。
+            if !effective_full && !orphan && started.elapsed() > self.budget {
                 break;
             }
             match self.index_file(&mut conn, f) {
@@ -280,7 +287,9 @@ impl DshIndexer {
             }
         }
 
-        // 清理已消失的会话目录；只删除不在本次扫描里的目录，避免误删 v4 刚接管的数据
+        // 清理已消失的会话目录；只删除不在本次扫描里的目录，避免误删 v4 刚接管的数据。
+        // 一个会话可能被多个目录（v0/v4 或迁移副本）引用：只要还有别的目录指向同一个
+        // session_id，就不能按 id 全局删数据行，否则幸存目录的行会被一起抹掉。
         let present: HashSet<String> = files.iter().map(|f| f.dir_key.clone()).collect();
         let gone: Vec<(String, Option<String>)> = stored
             .drain()
@@ -289,7 +298,16 @@ impl DshIndexer {
             .collect();
         for (dir_key, session_id) in gone {
             if let Some(sid) = session_id {
-                delete_session_rows(&mut conn, &sid)?;
+                let still_referenced: bool = conn
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM dsh_files WHERE session_id=?1 AND dir<>?2)",
+                        params![sid, dir_key],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(false);
+                if !still_referenced {
+                    delete_session_rows(&mut conn, &sid)?;
+                }
             }
             conn.execute("DELETE FROM dsh_files WHERE dir=?1", params![dir_key])?;
         }
@@ -308,6 +326,13 @@ impl DshIndexer {
         stats.parsed_files = parsed_files;
         stats.full_rebuild = effective_full;
         Ok(stats)
+    }
+
+    /// 测试用：跳过 2 秒节流立即跑一次增量（生产路径仍走 ensure_fresh）。
+    #[cfg(test)]
+    pub fn force_refresh(&mut self) -> Result<IndexStats, AppError> {
+        self.last_run = None;
+        self.ensure_fresh(false)
     }
 
     pub fn stats(&self) -> Result<IndexStats, AppError> {
@@ -508,7 +533,12 @@ impl DshIndexer {
     }
 
     fn load_files(&self, conn: &Connection) -> Result<HashMap<String, StoredFile>, AppError> {
-        let mut stmt = conn.prepare("SELECT dir,path,size,mtime,session_id FROM dsh_files")?;
+        // 左连接 dsh_session：台账有 session_id 但数据表无行 = 孤儿，需要重索引。
+        let mut stmt = conn.prepare(
+            "SELECT f.dir,f.path,f.size,f.mtime,f.session_id,
+                    CASE WHEN f.session_id IS NOT NULL AND s.id IS NULL THEN 1 ELSE 0 END
+             FROM dsh_files f LEFT JOIN dsh_session s ON s.id=f.session_id",
+        )?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -517,6 +547,7 @@ impl DshIndexer {
                     size: r.get::<_, i64>(2)? as u64,
                     mtime: r.get::<_, i64>(3)?,
                     session_id: r.get::<_, Option<String>>(4)?,
+                    orphan: r.get::<_, i64>(5)? != 0,
                 },
             ))
         })?;
@@ -1416,5 +1447,99 @@ mod tests {
             stats.requests, stats.files, stats.sessions, stats.tools, stats.last_error
         );
         eprintln!("db at {}", dir.join("index.sqlite").display());
+    }
+
+    /// 台账登记了 session，但数据表里没有行（早先被按 session_id 全局删除误伤）。
+    /// 下一轮刷新必须自愈重索引，不能因为 (size,mtime) 未变而永久跳过。
+    #[test]
+    fn orphan_ledger_rows_are_reindexed() {
+        let dir = temp_dir("orphan");
+        let sess = dir.join("sessions").join("proj").join("sess");
+        fs::create_dir_all(&sess).unwrap();
+        let frame = [
+            r#"{"type":"session","version":4,"id":"session-orphan","createdAt":1000,"cwd":"C:\\proj"}"#,
+            r#"{"type":"step/start","time":1100,"data":{"turn":1,"step":1}}"#,
+            r#"{"type":"assistant/message","time":1500,"data":{"turn":1,"step":1,"message":{"source":{"provider":"p","model":"m"}},"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":50}}}"#,
+        ]
+        .join("\n")
+            + "\n";
+        let path = sess.join("session.jsonl.zstd");
+        fs::write(&path, zstd::stream::encode_all(frame.as_bytes(), 3).unwrap()).unwrap();
+
+        let index_path = dir.join("index.sqlite");
+        let mut indexer = DshIndexer::new(dir.join("sessions"), index_path.clone());
+        let stats = indexer.ensure_fresh(true).unwrap();
+        assert_eq!(stats.sessions, 1);
+        assert_eq!(stats.requests, 1);
+
+        // 模拟事故：删掉数据行，但保留 dsh_files 台账（size/mtime 不变）
+        let conn = Connection::open(&index_path).unwrap();
+        conn.execute_batch(
+            "DELETE FROM dsh_model_usage; DELETE FROM dsh_tool_usage; DELETE FROM dsh_session;",
+        )
+        .unwrap();
+        let orphan: i64 = conn
+            .query_row("SELECT COUNT(*) FROM dsh_files WHERE session_id IS NOT NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(orphan, 1);
+        drop(conn);
+
+        // 增量刷新（非 full）：孤儿必须被重新解析，即使 (size,mtime) 完全没变
+        let stats = indexer.force_refresh().unwrap();
+        assert_eq!(stats.sessions, 1, "孤儿应恢复 session 行");
+        assert_eq!(stats.requests, 1, "孤儿应恢复用量行");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 真实库冒烟测试：在索引库副本上跑一次增量刷新，验证孤儿自愈。
+    /// 不碰生产索引库与 ~/.dsh 原始数据。
+    #[test]
+    #[ignore]
+    fn real_orphan_selfheal_smoke() {
+        let src = crate::sources::dsh_index_path(
+            &dirs::config_dir().unwrap().join("io.github.laomushan.agents-dashboard"),
+        );
+        let dir = temp_dir("real-orphan");
+        let copy = dir.join("index.sqlite");
+        fs::copy(&src, &copy).unwrap();
+
+        let before = {
+            let c = Connection::open(&copy).unwrap();
+            let n: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM dsh_files f LEFT JOIN dsh_session s ON s.id=f.session_id
+                     WHERE s.id IS NULL",
+                    [], |r| r.get(0),
+                )
+                .unwrap();
+            let u: i64 = c.query_row("SELECT COUNT(*) FROM dsh_model_usage", [], |r| r.get(0)).unwrap();
+            (n, u)
+        };
+        eprintln!("基线: 孤儿={} usage={}", before.0, before.1);
+
+        let root = crate::dsh::default_sessions_root();
+        let mut indexer = DshIndexer::new(root, copy.clone());
+        let stats = indexer.force_refresh().unwrap();
+        eprintln!("刷新后: sessions={} requests={} parsed={} err={:?}",
+            stats.sessions, stats.requests, stats.parsed_files, stats.last_error);
+
+        let after = {
+            let c = Connection::open(&copy).unwrap();
+            let n: i64 = c
+                .query_row(
+                    "SELECT COUNT(*) FROM dsh_files f LEFT JOIN dsh_session s ON s.id=f.session_id
+                     WHERE s.id IS NULL",
+                    [], |r| r.get(0),
+                )
+                .unwrap();
+            let u: i64 = c.query_row("SELECT COUNT(*) FROM dsh_model_usage", [], |r| r.get(0)).unwrap();
+            (n, u)
+        };
+        eprintln!("刷新后: 孤儿={} usage={}", after.0, after.1);
+        assert!(after.0 < before.0, "孤儿应减少: {} -> {}", before.0, after.0);
+        assert!(after.1 > before.1, "用量行应增加: {} -> {}", before.1, after.1);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -12,6 +12,7 @@ export type { Preset };
 const PRESETS: Array<{ key: Preset; label: string }> = [
   { key: "today", label: "今天" },
   { key: "yesterday", label: "昨天" },
+  { key: "24h", label: "24小时" },
   { key: "7d", label: "近 7 天" },
   { key: "30d", label: "近 30 天" },
   { key: "all", label: "全部" },
@@ -21,7 +22,7 @@ const PRESETS: Array<{ key: Preset; label: string }> = [
 // 自定义范围连同起止日期一起存,取不到合法值时回落到「今天」
 const PRESET_KEY = "rangePreset";
 const CUSTOM_KEY = "rangeCustom";
-const PRESET_KEYS: Preset[] = ["today", "yesterday", "7d", "30d", "all", "custom"];
+const PRESET_KEYS: Preset[] = ["today", "yesterday", "24h", "7d", "30d", "all", "custom"];
 
 function readStoredPreset(): Preset {
   const v = localStorage.getItem(PRESET_KEY) as Preset | null;

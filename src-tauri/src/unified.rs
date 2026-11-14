@@ -10,6 +10,7 @@
 //! 数据源范围（全部/zcode/DSH/Claude）在视图定义里过滤，查询函数无需关心。
 
 use crate::claude;
+use crate::zcode_history;
 use crate::error::AppError;
 use crate::sources::SourceFilter;
 use rusqlite::Connection;
@@ -47,6 +48,15 @@ const DSH_SESSION_INSERT: &str = "INSERT INTO session(source,id,parent_id,direct
 const CLAUDE_SESSION_INSERT: &str = "INSERT INTO session(source,id,parent_id,directory,title,task_type)
      SELECT 'claude', 'cc:' || id, 'cc:' || parent_id, directory, title, task_type FROM claude_session";
 
+// ZCode 早期用量（model_usage 表出现之前）：从 message.data / part.data 物化到索引库，
+// 与实时行同属 'zcode' 源、共用 'zc:' 命名空间前缀（session 直接复用 zc.session）。
+const ZH_MODEL: &str = "SELECT 'zcode', id, 'zc:' || session_id, model_id, \
+     'zc:' || provider_id, agent, status, started_at, duration_ms, time_to_first_token_ms, \
+     input_tokens, output_tokens, reasoning_tokens, cache_read_input_tokens, \
+     cache_creation_input_tokens, retry_count, cancelled_by_user, context_exceeded, \
+     error_type, error_code, error_message FROM zcode_history_model_usage";
+const ZH_TOOL: &str = "SELECT 'zcode', tool_name, status, started_at, duration_ms FROM zcode_history_tool_usage";
+
 const ZC_TOOL: &str = "SELECT 'zcode', tool_name, status, started_at, duration_ms FROM zc.tool_usage";
 const DSH_TOOL: &str = "SELECT 'dsh', tool_name, status, started_at, duration_ms FROM dsh_tool_usage";
 const CLAUDE_TOOL: &str = "SELECT 'claude', tool_name, status, started_at, duration_ms FROM claude_tool_usage";
@@ -78,8 +88,9 @@ pub fn open_query(
             index_path.display()
         ))
     })?;
-    // Claude 索引表由索引器建；这里兜底建表，保证没跑过索引时视图也能创建
+    // Claude / ZCode 历史索引表由索引器建；这里兜底建表，保证没跑过索引时视图也能创建
     claude::ensure_tables(&conn)?;
+    zcode_history::ensure_tables(&conn)?;
     attach_zcode(&conn, zcode_path)?;
 
     // session 物化成临时表（约 3 千行）：命名空间 id 作为真实主键，join 才走索引。
@@ -102,12 +113,15 @@ pub fn open_query(
     }
     .map_err(|e| AppError::Unavailable(format!("填充会话查询面失败: {e}")))?;
 
+    // 历史行属于 zcode 源：All 与 Zcode 都把它们并入，前端不需要新增来源选项。
+    let zc_model = format!("{ZC_MODEL} UNION ALL {ZH_MODEL}");
+    let zc_tool = format!("{ZC_TOOL} UNION ALL {ZH_TOOL}");
     let (model, tool) = match filter {
         SourceFilter::All => (
-            format!("{ZC_MODEL} UNION ALL {DSH_MODEL} UNION ALL {CLAUDE_MODEL}"),
-            format!("{ZC_TOOL} UNION ALL {DSH_TOOL} UNION ALL {CLAUDE_TOOL}"),
+            format!("{zc_model} UNION ALL {DSH_MODEL} UNION ALL {CLAUDE_MODEL}"),
+            format!("{zc_tool} UNION ALL {DSH_TOOL} UNION ALL {CLAUDE_TOOL}"),
         ),
-        SourceFilter::Zcode => (ZC_MODEL.to_string(), ZC_TOOL.to_string()),
+        SourceFilter::Zcode => (zc_model, zc_tool),
         SourceFilter::Dsh => (DSH_MODEL.to_string(), DSH_TOOL.to_string()),
         SourceFilter::Claude => (CLAUDE_MODEL.to_string(), CLAUDE_TOOL.to_string()),
     };

@@ -22,6 +22,7 @@ export const dashboardKeys = {
       request.preset,
       request.range.from ?? null,
       request.range.to ?? null,
+      request.range.lastHours ?? null,
       request.customFrom,
       request.customTo,
       request.rateWindowSec,
@@ -38,6 +39,7 @@ export function dashboardViewKey(request: DashboardRequest): string {
     request.preset,
     request.range.from ?? null,
     request.range.to ?? null,
+    request.range.lastHours ?? null,
     request.customFrom,
     request.customTo,
   ]);

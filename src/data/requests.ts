@@ -2,7 +2,7 @@ import type { SourceFilter } from "../../shared/types";
 import type { Range } from "../api";
 
 /** 时间范围预设；只决定查询窗口与视图标签，不直接参与渲染 */
-export type Preset = "today" | "yesterday" | "7d" | "30d" | "all" | "custom";
+export type Preset = "today" | "yesterday" | "24h" | "7d" | "30d" | "all" | "custom";
 
 /**
  * 只影响视图形状/标签的请求部分。
