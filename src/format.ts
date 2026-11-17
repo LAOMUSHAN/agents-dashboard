@@ -129,9 +129,9 @@ function abbreviate(value: number, decimals: number): string {
  * 估算费用 KPI 的候选显示串，按精度从高到低排列。
  * 组件用真实宽度探针挑出「放得下且最精确」的那个：宽则小数位多，窄则少。
  *
- * 两侧整数位合计 ≥8 时（如 ¥2771 · $1396）优先用 K/W/M 缩写，避免 26px 字号下
- * 完整数字被硬截断成两行；<8 时优先完整数字。两种档位都作为候选保留：
- * 超宽窗口仍能读到完整值，极窄窗口也不会折行（缩写是最短兜底）。
+ * 顺序只由精度决定，与金额位数无关：完整 2 位小数 → 1 位 → 0 位 → 缩写。
+ * 是否够宽完全交给组件里的真实宽度探针判断——位数多不等于放不下，
+ * 反过来只要完整值放得下就必须显示完整值，缩写只作极窄窗口的兜底。
  * 分以下的金额仍走 4 位小数，避免被抹成 0。
  */
 export function costSplitCandidates(
@@ -157,12 +157,9 @@ export function costSplitCandidates(
     compact.push(parts.map((p) => `${p.symbol}${abbreviate(p.value, d)}`).join(" · "));
   }
 
-  const totalDigits = parts.reduce((sum, p) => sum + integerDigits(p.value), 0);
-  // 合计 ≥8：缩写优先（避免硬截断），完整值留给超宽窗口；
-  // 合计 <8：完整值优先，缩写作为「连 0 位小数都放不下」时的最终兜底。
+  // 精度优先：完整值从 2 位小数降到 0 位，仍放不下才退到缩写。
   // 去重：6 位/8 位时缩写 1 位与 0 位相同，小金额的完整 0 位与缩写也可能撞串。
-  const ordered = totalDigits >= 8 ? [...compact, ...full] : [...full, ...compact];
-  return [...new Set(ordered)];
+  return [...new Set([...full, ...compact])];
 }
 
 /** 占比:part/total,total 为 0 时返回 "-" */

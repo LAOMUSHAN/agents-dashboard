@@ -186,8 +186,9 @@ export function SummaryCards({
   source?: "all" | "zcode" | "dsh" | "claude";
 }) {
   const [more, setMore] = useState(false);
-  // 费用候选按精度排好序；首个就是 8 位以上场景的缩写串，用作探针测量前的首屏兜底，
-  // 避免先闪一下完整长串再收缩。summary 变化时重算。
+  // 费用候选按精度排好序（完整 2 位小数在前，缩写兜底在后），首个用作探针测量前的
+  // 初始值；useLayoutEffect 在首次绘制前就会按真实宽度改写，不会先闪一下长串。
+  // summary 变化时重算。
   const costCandidates = useMemo(
     () => (summary ? costSplitCandidates(summary.costUsd, summary.costCny) : ["$0.00"]),
     [summary?.costUsd, summary?.costCny],
